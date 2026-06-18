@@ -1,0 +1,23 @@
+# Local development Postgres for Experience-OS only.
+# Isolated container + named volume; not shared with any other project.
+# Start with:  docker compose up -d
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: experience-os-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: experience_os
+    ports:
+      - "5432:5432"
+    volumes:
+      - experience_os_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d experience_os"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  experience_os_pgdata:
