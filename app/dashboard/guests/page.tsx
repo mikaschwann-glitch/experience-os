@@ -1,7 +1,17 @@
 import Link from "next/link";
 import { getAuthContext } from "@/lib/auth/devAuth";
 import { listGuestsWithSummary } from "@/lib/repositories/guests";
-import { Card, C, SectionTitle } from "../_components/ui";
+import {
+  Avatar,
+  Card,
+  C,
+  EmptyState,
+  Icon,
+  MetricChip,
+  PageHeader,
+  SectionTitle,
+  StatusBadge,
+} from "../_components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -11,54 +21,54 @@ export default async function GuestsPage() {
 
   return (
     <div>
-      <h1 className="text-[24px] font-semibold tracking-tight" style={{ color: C.ink }}>
-        Guests
-      </h1>
-      <p className="mt-2 text-[14px]" style={{ color: C.muted }}>
-        The people behind every stay.
-      </p>
+      <PageHeader title="Guests" subtitle="The people behind every stay." />
 
       <div className="mt-6">
-        <SectionTitle>All guests</SectionTitle>
+        <SectionTitle
+          right={
+            <span className="text-[12.5px]" style={{ color: C.muted }}>
+              {guests.length} {guests.length === 1 ? "guest" : "guests"}
+            </span>
+          }
+        >
+          All guests
+        </SectionTitle>
         <Card className="mt-3 overflow-hidden">
           {guests.length === 0 ? (
-            <div className="px-5 py-6 text-[13px]" style={{ color: C.muted }}>
+            <EmptyState>
               No guests yet. Run <code>npm run db:seed</code> to load the demo data.
-            </div>
+            </EmptyState>
           ) : (
             guests.map((g, i, arr) => (
               <Link
                 key={g.id}
                 href={`/dashboard/guests/${g.id}`}
-                className="flex items-center gap-4 px-5 py-4 no-underline"
+                className="flex items-center gap-4 px-5 py-4 no-underline transition-colors hover:bg-[#FBF8F1]"
                 style={{
                   borderBottom: i === arr.length - 1 ? "none" : `1px solid ${C.soft}`,
                   color: C.ink,
                 }}
               >
-                <div
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[12px] font-semibold"
-                  style={{ background: C.chip, color: C.muted }}
-                >
-                  {g.fullName.split(" ").map((p) => p[0]).slice(0, 2).join("")}
-                </div>
+                <Avatar name={g.fullName} />
                 <div className="min-w-0 flex-1">
                   <div className="text-[14px] font-medium">{g.fullName}</div>
-                  <div className="mt-0.5 text-[12.5px]" style={{ color: C.muted }}>
-                    {g.currentStay
-                      ? `${g.currentStay.unitName ?? "Unit TBD"} · ${g.currentStay.startDate} – ${g.currentStay.endDate}`
-                      : "No stay on record"}
+                  <div className="mt-0.5 flex items-center gap-1.5 text-[12.5px]" style={{ color: C.muted }}>
+                    {g.currentStay ? (
+                      <>
+                        <Icon name="bed" size={13} /> {g.currentStay.unitName ?? "Unit TBD"}
+                        <span style={{ color: C.stone }}>·</span>
+                        {g.currentStay.startDate} – {g.currentStay.endDate}
+                      </>
+                    ) : (
+                      "No stay on record"
+                    )}
                   </div>
                 </div>
-                <div className="hidden gap-6 text-[12.5px] sm:flex" style={{ color: C.muted }}>
-                  <span>{g.insightCount} insights</span>
-                  <span>{g.openRecommendationCount} open recs</span>
+                <div className="hidden items-center gap-5 sm:flex">
+                  <MetricChip value={g.insightCount} label="insights" />
+                  <MetricChip value={g.openRecommendationCount} label="open recs" />
                 </div>
-                {g.currentStay ? (
-                  <span className="text-[12.5px] capitalize" style={{ color: C.muted }}>
-                    {g.currentStay.status.replace("_", " ")}
-                  </span>
-                ) : null}
+                {g.currentStay ? <StatusBadge status={g.currentStay.status} /> : null}
               </Link>
             ))
           )}

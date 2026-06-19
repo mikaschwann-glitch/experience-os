@@ -3,15 +3,19 @@ import { notFound } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/devAuth";
 import { getGuestMemory } from "@/lib/repositories/guests";
 import {
+  Avatar,
   Card,
   C,
+  EmptyState,
   Field,
+  Icon,
+  type IconName,
+  RationaleNote,
   SectionTitle,
   Select,
   SensitiveNote,
   StatusBadge,
   SubmitButton,
-  Tag,
   TextArea,
   TextInput,
 } from "../../_components/ui";
@@ -40,6 +44,19 @@ const EVENT_LABEL: Record<string, string> = {
   "outcome.created": "Outcome logged",
 };
 
+const EVENT_ICON: Record<string, IconName> = {
+  "guest.created": "user",
+  "stay.created": "bed",
+  "signal.created": "note",
+  "insight.created": "recommend",
+  "recommendation.created": "recommend",
+  "recommendation.accepted": "check",
+  "recommendation.dismissed": "circle",
+  "host_action.created": "clipboard",
+  "host_action.updated": "clipboard",
+  "outcome.created": "check",
+};
+
 function fmt(d: Date | string): string {
   const date = typeof d === "string" ? new Date(d) : d;
   return date.toLocaleString("en-GB", {
@@ -62,6 +79,8 @@ export default async function GuestMemoryPage({
 
   const { guest, stays, signals, insights, recommendations, hostActions, outcomes, events } =
     memory;
+  const primaryStay = stays[0] ?? null;
+  const contact = [guest.email, guest.language, guest.country].filter(Boolean).join(" · ");
 
   return (
     <div>
@@ -73,18 +92,37 @@ export default async function GuestMemoryPage({
         <span style={{ color: C.ink }}>{guest.fullName}</span>
       </div>
 
-      <h1 className="text-[24px] font-semibold tracking-tight" style={{ color: C.ink }}>
-        {guest.fullName}
-      </h1>
-      <div className="mt-1 text-[13.5px]" style={{ color: C.muted }}>
-        {[guest.email, guest.language, guest.country].filter(Boolean).join(" · ") || "No contact details"}
+      {/* Identity header */}
+      <div className="flex flex-wrap items-start gap-4">
+        <Avatar name={guest.fullName} tone="clay" size={56} />
+        <div className="min-w-0 flex-1">
+          <h1 className="text-[24px] font-semibold tracking-tight" style={{ color: C.ink }}>
+            {guest.fullName}
+          </h1>
+          <div className="mt-1 text-[13.5px]" style={{ color: C.muted }}>
+            {contact || "No contact details"}
+          </div>
+          {primaryStay ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[12.5px]" style={{ color: C.muted }}>
+              <span className="flex items-center gap-1.5">
+                <Icon name="bed" size={14} /> {primaryStay.unitName ?? "Unit TBD"}
+              </span>
+              <span style={{ color: C.stone }}>·</span>
+              <span className="flex items-center gap-1.5">
+                <Icon name="calendar" size={14} /> {primaryStay.startDate} – {primaryStay.endDate}
+              </span>
+              <StatusBadge status={primaryStay.status} />
+              {primaryStay.visitNumber > 1 ? <span>visit {primaryStay.visitNumber}</span> : null}
+            </div>
+          ) : null}
+        </div>
       </div>
 
-      <div className="mt-6 grid grid-cols-1 gap-7 lg:grid-cols-[1fr_320px]">
-        {/* ---- Left: the manual chain ---- */}
+      <div className="mt-7 grid grid-cols-1 gap-7 lg:grid-cols-[1fr_330px]">
+        {/* ---- Left: the manual chain (the core product workflow) ---- */}
         <div className="space-y-7">
           {/* Capture a signal */}
-          <div>
+          <section>
             <SectionTitle>Capture a signal</SectionTitle>
             <Card className="mt-3 p-4">
               <form action={createSignalAction.bind(null, guest.id)} className="space-y-3">
@@ -96,31 +134,41 @@ export default async function GuestMemoryPage({
                     placeholder="e.g. Mentioned it's their tenth anniversary; asked about quiet sunrise spots."
                   />
                 </Field>
-                <SubmitButton type="submit">Add signal</SubmitButton>
+                <SubmitButton type="submit">
+                  <Icon name="plus" size={15} /> Add signal
+                </SubmitButton>
               </form>
             </Card>
-          </div>
+          </section>
 
           {/* Signals -> create insight */}
-          <div>
+          <section>
             <SectionTitle>Signals</SectionTitle>
             <div className="mt-3 space-y-3">
               {signals.length === 0 ? (
-                <Card className="p-4 text-[13px]" style={{ color: C.muted }}>
-                  No signals yet.
+                <Card>
+                  <EmptyState>No signals captured yet.</EmptyState>
                 </Card>
               ) : (
                 signals.map((s) => (
                   <Card key={s.id} className="p-4">
-                    <div className="text-[13.5px]" style={{ color: C.ink }}>
-                      {s.body}
-                    </div>
-                    <div className="mt-1 text-[11.5px]" style={{ color: C.muted }}>
-                      {s.type} · {fmt(s.occurredAt)}
+                    <div className="flex gap-3">
+                      <span className="mt-0.5 shrink-0" style={{ color: C.muted }}>
+                        <Icon name="note" size={16} />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[13.5px]" style={{ color: C.ink }}>
+                          {s.body}
+                        </div>
+                        <div className="mt-1 text-[11.5px] capitalize" style={{ color: C.muted }}>
+                          {s.type} · {fmt(s.occurredAt)}
+                        </div>
+                      </div>
                     </div>
                     <form
                       action={createInsightAction.bind(null, s.id, guest.id)}
-                      className="mt-3 flex flex-wrap items-end gap-2"
+                      className="mt-3 flex flex-wrap items-end gap-2 pt-3"
+                      style={{ borderTop: `1px solid ${C.soft}` }}
                     >
                       <div className="min-w-[220px] flex-1">
                         <TextInput name="summary" required placeholder="Summarize the insight…" />
@@ -133,15 +181,15 @@ export default async function GuestMemoryPage({
                 ))
               )}
             </div>
-          </div>
+          </section>
 
           {/* Insights -> create recommendation */}
-          <div>
+          <section>
             <SectionTitle>Insights</SectionTitle>
             <div className="mt-3 space-y-3">
               {insights.length === 0 ? (
-                <Card className="p-4 text-[13px]" style={{ color: C.muted }}>
-                  No insights yet.
+                <Card>
+                  <EmptyState>No insights yet — create one from a signal above.</EmptyState>
                 </Card>
               ) : (
                 insights.map((i) => (
@@ -150,7 +198,7 @@ export default async function GuestMemoryPage({
                       {i.summary}
                     </div>
                     {i.detail ? (
-                      <div className="mt-1 text-[12.5px]" style={{ color: C.muted }}>
+                      <div className="mt-1 text-[12.5px] leading-relaxed" style={{ color: C.muted }}>
                         {i.detail}
                       </div>
                     ) : null}
@@ -159,7 +207,8 @@ export default async function GuestMemoryPage({
                     </div>
                     <form
                       action={createRecommendationAction.bind(null, i.id, guest.id)}
-                      className="mt-3 space-y-2"
+                      className="mt-3 space-y-2 pt-3"
+                      style={{ borderTop: `1px solid ${C.soft}` }}
                     >
                       <TextInput name="title" required placeholder="Recommendation title…" />
                       <TextInput name="description" placeholder="Short description (optional)…" />
@@ -171,40 +220,42 @@ export default async function GuestMemoryPage({
                 ))
               )}
             </div>
-          </div>
+          </section>
 
-          {/* Recommendations -> accept/dismiss -> host action */}
-          <div>
+          {/* Recommendations -> decision objects -> host action */}
+          <section>
             <SectionTitle>Recommendations</SectionTitle>
             <div className="mt-3 space-y-3">
               {recommendations.length === 0 ? (
-                <Card className="p-4 text-[13px]" style={{ color: C.muted }}>
-                  No recommendations yet.
+                <Card>
+                  <EmptyState>No recommendations yet.</EmptyState>
                 </Card>
               ) : (
                 recommendations.map((r) => (
                   <Card key={r.id} className="p-4">
                     <div className="flex items-start justify-between gap-3">
-                      <div className="text-[14px] font-semibold" style={{ color: C.ink }}>
+                      <div className="text-[15px] font-semibold" style={{ color: C.ink }}>
                         {r.title}
                       </div>
                       <StatusBadge status={r.status} />
                     </div>
                     {r.description ? (
-                      <p className="mt-1 text-[13px] leading-relaxed" style={{ color: C.muted }}>
+                      <p className="mt-1.5 text-[13px] leading-relaxed" style={{ color: C.muted }}>
                         {r.description}
                       </p>
                     ) : null}
                     {r.rationale ? (
-                      <p className="mt-2 text-[12.5px] italic" style={{ color: C.muted }}>
-                        Why: {r.rationale}
-                      </p>
+                      <div className="mt-3">
+                        <RationaleNote>{r.rationale}</RationaleNote>
+                      </div>
                     ) : null}
 
                     {r.status === "pending" ? (
-                      <div className="mt-3 flex gap-2">
+                      <div className="mt-3 flex items-center gap-2">
                         <form action={acceptRecommendationAction.bind(null, r.id, guest.id)}>
-                          <SubmitButton type="submit">Approve</SubmitButton>
+                          <SubmitButton type="submit">
+                            <Icon name="check" size={15} /> Approve
+                          </SubmitButton>
                         </form>
                         <form action={dismissRecommendationAction.bind(null, r.id, guest.id)}>
                           <SubmitButton type="submit" variant="ghost">
@@ -217,7 +268,8 @@ export default async function GuestMemoryPage({
                     {r.status === "accepted" ? (
                       <form
                         action={createHostActionAction.bind(null, r.id, guest.id)}
-                        className="mt-3 flex flex-wrap items-end gap-2"
+                        className="mt-3 flex flex-wrap items-end gap-2 pt-3"
+                        style={{ borderTop: `1px solid ${C.soft}` }}
                       >
                         <div className="min-w-[220px] flex-1">
                           <TextInput name="title" required placeholder="Host action to prepare…" />
@@ -231,34 +283,40 @@ export default async function GuestMemoryPage({
                 ))
               )}
             </div>
-          </div>
+          </section>
 
           {/* Host actions -> log outcome */}
-          <div>
+          <section>
             <SectionTitle>Host actions</SectionTitle>
             <div className="mt-3 space-y-3">
               {hostActions.length === 0 ? (
-                <Card className="p-4 text-[13px]" style={{ color: C.muted }}>
-                  No host actions yet.
+                <Card>
+                  <EmptyState>No host actions planned yet.</EmptyState>
                 </Card>
               ) : (
                 hostActions.map((h) => (
                   <Card key={h.id} className="p-4">
                     <div className="flex items-start justify-between gap-3">
-                      <div className="text-[14px] font-medium" style={{ color: C.ink }}>
-                        {h.title}
+                      <div className="flex items-start gap-3">
+                        <span className="mt-0.5 shrink-0" style={{ color: C.muted }}>
+                          <Icon name="clipboard" size={16} />
+                        </span>
+                        <div className="text-[14px] font-medium" style={{ color: C.ink }}>
+                          {h.title}
+                        </div>
                       </div>
                       <StatusBadge status={h.status} />
                     </div>
                     {h.description ? (
-                      <p className="mt-1 text-[12.5px]" style={{ color: C.muted }}>
+                      <p className="mt-1 pl-7 text-[12.5px] leading-relaxed" style={{ color: C.muted }}>
                         {h.description}
                       </p>
                     ) : null}
                     {h.status !== "done" ? (
                       <form
                         action={logOutcomeAction.bind(null, h.id, guest.id)}
-                        className="mt-3 flex flex-wrap items-end gap-2"
+                        className="mt-3 flex flex-wrap items-end gap-2 pt-3"
+                        style={{ borderTop: `1px solid ${C.soft}` }}
                       >
                         <Select name="result" defaultValue="positive" style={{ width: 140 }}>
                           <option value="positive">Positive</option>
@@ -278,25 +336,30 @@ export default async function GuestMemoryPage({
                 ))
               )}
             </div>
-          </div>
+          </section>
 
           {/* Outcomes */}
           {outcomes.length > 0 ? (
-            <div>
+            <section>
               <SectionTitle>Outcomes</SectionTitle>
               <Card className="mt-3 p-4">
                 <ul className="space-y-3">
                   {outcomes.map((o) => (
                     <li key={o.id} className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-[13px] font-medium capitalize" style={{ color: C.ink }}>
-                          {o.result}
-                        </div>
-                        {o.notes ? (
-                          <div className="text-[12.5px]" style={{ color: C.muted }}>
-                            {o.notes}
+                      <div className="flex items-start gap-3">
+                        <span className="mt-0.5 shrink-0" style={{ color: C.clay }}>
+                          <Icon name="check" size={16} />
+                        </span>
+                        <div>
+                          <div className="text-[13px] font-medium capitalize" style={{ color: C.ink }}>
+                            {o.result}
                           </div>
-                        ) : null}
+                          {o.notes ? (
+                            <div className="text-[12.5px]" style={{ color: C.muted }}>
+                              {o.notes}
+                            </div>
+                          ) : null}
+                        </div>
                       </div>
                       <span className="shrink-0 text-[11.5px]" style={{ color: C.muted }}>
                         {fmt(o.occurredAt)}
@@ -305,14 +368,14 @@ export default async function GuestMemoryPage({
                   ))}
                 </ul>
               </Card>
-            </div>
+            </section>
           ) : null}
         </div>
 
-        {/* ---- Right: profile, stays, sensitive, timeline ---- */}
+        {/* ---- Right: stay context, sensitive info, audit timeline ---- */}
         <div className="space-y-5">
-          <div>
-            <SectionTitle>Stays</SectionTitle>
+          <section>
+            <SectionTitle>Stay context</SectionTitle>
             <Card className="mt-3 p-4">
               {stays.length === 0 ? (
                 <div className="text-[13px]" style={{ color: C.muted }}>
@@ -322,11 +385,14 @@ export default async function GuestMemoryPage({
                 <ul className="space-y-3">
                   {stays.map((s) => (
                     <li key={s.id} className="text-[13px]">
-                      <div className="font-medium" style={{ color: C.ink }}>
-                        {s.unitName ?? "Unit TBD"}
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium" style={{ color: C.ink }}>
+                          {s.unitName ?? "Unit TBD"}
+                        </span>
+                        <StatusBadge status={s.status} />
                       </div>
-                      <div style={{ color: C.muted }}>
-                        {s.startDate} – {s.endDate} · <span className="capitalize">{s.status.replace("_", " ")}</span>
+                      <div className="mt-0.5" style={{ color: C.muted }}>
+                        {s.startDate} – {s.endDate}
                         {s.visitNumber > 1 ? ` · visit ${s.visitNumber}` : ""}
                       </div>
                     </li>
@@ -334,13 +400,13 @@ export default async function GuestMemoryPage({
                 </ul>
               )}
             </Card>
-          </div>
+          </section>
 
           {guest.notes ? (
             <SensitiveNote title="Sensitive — handle with care">{guest.notes}</SensitiveNote>
           ) : null}
 
-          <div>
+          <section>
             <SectionTitle>Event timeline</SectionTitle>
             <Card className="mt-3 p-4">
               {events.length === 0 ? (
@@ -348,14 +414,21 @@ export default async function GuestMemoryPage({
                   No events yet.
                 </div>
               ) : (
-                <ul className="space-y-3">
-                  {events.map((e) => (
-                    <li key={e.id} className="flex items-start gap-3">
-                      <span
-                        className="mt-[6px] h-1.5 w-1.5 shrink-0 rounded-full"
-                        style={{ background: C.clay }}
-                      />
-                      <div>
+                <ul className="space-y-0">
+                  {events.map((e, i, arr) => (
+                    <li key={e.id} className="flex gap-3">
+                      <div className="flex flex-col items-center">
+                        <span
+                          className="flex h-7 w-7 items-center justify-center rounded-full"
+                          style={{ background: C.paper, color: C.clay }}
+                        >
+                          <Icon name={EVENT_ICON[e.type] ?? "circle"} size={13} />
+                        </span>
+                        {i < arr.length - 1 ? (
+                          <span className="my-0.5 w-px flex-1" style={{ background: C.soft }} />
+                        ) : null}
+                      </div>
+                      <div className="min-w-0 flex-1 pb-3.5">
                         <div className="text-[12.5px]" style={{ color: C.ink }}>
                           {EVENT_LABEL[e.type] ?? e.type}
                         </div>
@@ -368,9 +441,7 @@ export default async function GuestMemoryPage({
                 </ul>
               )}
             </Card>
-          </div>
-
-          <Tag>Tenant-scoped · {guest.tenantId.slice(0, 8)}…</Tag>
+          </section>
         </div>
       </div>
     </div>

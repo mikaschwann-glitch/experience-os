@@ -3,7 +3,10 @@ import { listPropertiesWithUnits } from "@/lib/repositories/properties";
 import {
   Card,
   C,
+  EmptyState,
   Field,
+  Icon,
+  PageHeader,
   SectionTitle,
   SubmitButton,
   TextInput,
@@ -18,42 +21,66 @@ export default async function PropertiesPage() {
 
   return (
     <div>
-      <h1 className="text-[24px] font-semibold tracking-tight" style={{ color: C.ink }}>
-        Properties &amp; units
-      </h1>
-      <p className="mt-2 text-[14px]" style={{ color: C.muted }}>
-        Basic property and unit records (Run 1 CRUD).
-      </p>
+      <PageHeader
+        title="Properties & units"
+        subtitle="Your places and the cabins within them."
+      />
 
       <div className="mt-6 grid grid-cols-1 gap-7 lg:grid-cols-[1fr_300px]">
         <div className="space-y-5">
           {properties.length === 0 ? (
-            <Card className="p-5 text-[13px]" style={{ color: C.muted }}>
-              No properties yet.
+            <Card>
+              <EmptyState>No properties yet — add one on the right.</EmptyState>
             </Card>
           ) : (
             properties.map((p) => (
               <Card key={p.id} className="overflow-hidden">
-                <div className="px-5 py-4" style={{ borderBottom: `1px solid ${C.soft}` }}>
-                  <div className="text-[15px] font-semibold" style={{ color: C.ink }}>
-                    {p.name}
-                  </div>
-                  {p.location ? (
-                    <div className="text-[12.5px]" style={{ color: C.muted }}>
-                      {p.location}
+                <div
+                  className="flex items-center gap-3 px-5 py-4"
+                  style={{ borderBottom: `1px solid ${C.soft}` }}
+                >
+                  <span
+                    className="flex h-9 w-9 items-center justify-center rounded-lg"
+                    style={{ background: C.paper, color: C.muted }}
+                  >
+                    <Icon name="properties" size={18} />
+                  </span>
+                  <div>
+                    <div className="text-[15px] font-semibold" style={{ color: C.ink }}>
+                      {p.name}
                     </div>
-                  ) : null}
+                    {p.location ? (
+                      <div className="text-[12.5px]" style={{ color: C.muted }}>
+                        {p.location}
+                      </div>
+                    ) : null}
+                  </div>
+                  <span className="ml-auto text-[12.5px]" style={{ color: C.muted }}>
+                    {p.units.length} {p.units.length === 1 ? "unit" : "units"}
+                  </span>
                 </div>
+
                 <div className="px-5 py-3">
                   {p.units.length === 0 ? (
                     <div className="py-1 text-[13px]" style={{ color: C.muted }}>
                       No units yet.
                     </div>
                   ) : (
-                    <ul className="divide-y" style={{ borderColor: C.soft }}>
-                      {p.units.map((u) => (
-                        <li key={u.id} className="flex items-center justify-between py-2 text-[13px]">
-                          <span style={{ color: C.ink }}>{u.name}</span>
+                    <ul>
+                      {p.units.map((u, i, arr) => (
+                        <li
+                          key={u.id}
+                          className="flex items-center justify-between py-2.5 text-[13px]"
+                          style={{
+                            borderBottom: i === arr.length - 1 ? "none" : `1px solid ${C.soft}`,
+                          }}
+                        >
+                          <span className="flex items-center gap-2.5" style={{ color: C.ink }}>
+                            <span style={{ color: C.muted }}>
+                              <Icon name="bed" size={15} />
+                            </span>
+                            {u.name}
+                          </span>
                           <span style={{ color: C.muted }}>
                             {[u.type, `sleeps ${u.capacity}`].filter(Boolean).join(" · ")}
                           </span>
@@ -78,7 +105,7 @@ export default async function PropertiesPage() {
                       <TextInput name="capacity" type="number" min={1} placeholder="cap" />
                     </div>
                     <SubmitButton type="submit" variant="ghost">
-                      Add unit
+                      <Icon name="plus" size={14} /> Add unit
                     </SubmitButton>
                   </form>
                 </div>
@@ -97,7 +124,9 @@ export default async function PropertiesPage() {
               <Field label="Location">
                 <TextInput name="location" placeholder="e.g. São Miguel, Azores" />
               </Field>
-              <SubmitButton type="submit">Create property</SubmitButton>
+              <SubmitButton type="submit">
+                <Icon name="plus" size={14} /> Create property
+              </SubmitButton>
             </form>
           </Card>
         </div>

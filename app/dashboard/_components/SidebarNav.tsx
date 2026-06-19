@@ -2,18 +2,18 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { C } from "./ui";
+import { C, Icon, type IconName } from "./ui";
 
 /**
  * Charcoal cockpit rail. Nav items map to routes that actually exist in Run 1
  * (no decorative-only items). Active state uses a translucent fill + clay inset
  * accent bar, matching the frozen design direction.
  */
-const NAV: { label: string; href: string }[] = [
-  { label: "Today", href: "/dashboard" },
-  { label: "Guests", href: "/dashboard/guests" },
-  { label: "Recommendations", href: "/dashboard/recommendations" },
-  { label: "Properties", href: "/dashboard/properties" },
+const NAV: { label: string; href: string; icon: IconName }[] = [
+  { label: "Today", href: "/dashboard", icon: "today" },
+  { label: "Guests", href: "/dashboard/guests", icon: "guests" },
+  { label: "Recommendations", href: "/dashboard/recommendations", icon: "recommend" },
+  { label: "Properties", href: "/dashboard/properties", icon: "properties" },
 ];
 
 export function SidebarNav({
@@ -56,7 +56,7 @@ export function SidebarNav({
             <Link
               key={item.href}
               href={item.href}
-              className="mb-[3px] flex items-center rounded-lg px-3 py-[9px] text-[14px] no-underline"
+              className="mb-[3px] flex items-center gap-3 rounded-lg px-3 py-[9px] text-[14px] no-underline"
               style={{
                 background: isActive ? "rgba(255,255,255,0.055)" : "transparent",
                 color: isActive ? C.sideActive : C.sideText,
@@ -64,6 +64,9 @@ export function SidebarNav({
                 fontWeight: isActive ? 600 : 450,
               }}
             >
+              <span style={{ color: isActive ? C.clay : C.sideTextDim }}>
+                <Icon name={item.icon} size={17} stroke={1.7} />
+              </span>
               {item.label}
             </Link>
           );
