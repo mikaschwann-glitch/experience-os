@@ -21,7 +21,18 @@ export function getDb(): PostgresJsDatabase<typeof schema> {
       "DATABASE_URL is not set. Copy .env.example to .env.local and set it.",
     );
   }
-  sql = postgres(url, { max: 10 });
+  // Serverless-aware connection config. Anything that isn't localhost is treated
+  // as managed/cloud Postgres reached through a transaction-mode pooler
+  // (Neon / Supabase :6543 / PgBouncer), which does NOT support prepared
+  // statements and where each function instance should hold few connections.
+  // Local Docker keeps the original pooled, prepared behavior unchanged.
+  // TLS is taken from the connection string (managed URLs must include
+  // ?sslmode=require) — see docs/cloud-preview.md.
+  const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
+  sql = postgres(url, {
+    max: isLocal ? 10 : 1,
+    prepare: isLocal,
+  });
   db = drizzle(sql, { schema });
   return db;
 }
