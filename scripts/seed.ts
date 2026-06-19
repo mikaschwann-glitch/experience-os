@@ -29,6 +29,13 @@ import {
 } from "@/lib/repositories/slice";
 import { DEMO_TENANT_SLUG, DEMO_USER_EMAIL } from "@/lib/auth/devAuth";
 
+// tsx does not auto-load .env.local; load it before any DB access (dev only).
+try {
+  process.loadEnvFile(".env.local");
+} catch {
+  // No .env.local — rely on the ambient environment otherwise.
+}
+
 function fmt(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
