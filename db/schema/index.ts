@@ -395,3 +395,6 @@ export * from "./research";
 
 // Wave 2B — Property Intelligence tables (additive; references tenants + properties above).
 export * from "./propertyIntelligence";
+
+// Wave 2C — Feasibility Engine tables (additive; references the above + research/PI).
+export * from "./feasibility";

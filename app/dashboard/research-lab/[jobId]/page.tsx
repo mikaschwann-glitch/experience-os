@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/devAuth";
 import { getJobDetail } from "@/lib/repositories/research";
+import { getLatestRunForBrief } from "@/lib/repositories/feasibility";
 import {
   Card,
   C,
@@ -11,7 +12,7 @@ import {
   SubmitButton,
   TextInput,
 } from "../../_components/ui";
-import { reviewBriefAction } from "../actions";
+import { evaluateFeasibilityAction, reviewBriefAction } from "../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +60,8 @@ export default async function JobDetailPage({ params }: { params: Promise<{ jobI
   if (!detail) notFound();
 
   const { job, guest, sources, candidates, evidence, brief, briefItems, incidents, timeline } = detail;
+  // Latest feasibility run for this brief (so the host can jump back to a result).
+  const latestRun = brief && brief.status === "approved" ? await getLatestRunForBrief(tenantId, brief.id) : null;
   const draft = brief && brief.status === "draft";
 
   return (
@@ -254,6 +257,25 @@ export default async function JobDetailPage({ params }: { params: Promise<{ jobI
                 ) : brief.hostNote ? (
                   <div className="mt-3 text-[12.5px]" style={{ color: C.muted }}>
                     Host note: {brief.hostNote}
+                  </div>
+                ) : null}
+
+                {brief.status === "approved" ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-3 pt-3" style={{ borderTop: `1px solid ${C.soft}` }}>
+                    <form action={evaluateFeasibilityAction.bind(null, brief.id)}>
+                      <SubmitButton type="submit" data-testid="evaluate-feasibility">
+                        <Icon name="arrowRight" size={15} /> Evaluate feasible preparations
+                      </SubmitButton>
+                    </form>
+                    {latestRun ? (
+                      <Link
+                        href={`/dashboard/feasibility/${latestRun.id}`}
+                        className="text-[12.5px] font-medium no-underline"
+                        style={{ color: C.clay }}
+                      >
+                        View latest result →
+                      </Link>
+                    ) : null}
                   </div>
                 ) : null}
               </Card>

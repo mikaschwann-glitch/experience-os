@@ -39,7 +39,14 @@ export type DomainEventType =
   | "property_intelligence.created"
   | "property_intelligence.updated"
   | "property_intelligence.archived"
-  | "property_intelligence.restored";
+  | "property_intelligence.restored"
+  // Wave 2C — Feasibility Engine lifecycle (additive; PII-light payloads).
+  | "feasibility.evaluated"
+  | "feasibility.refused"
+  | "feasibility.proposal_accepted"
+  | "feasibility.proposal_rejected"
+  | "feasibility.proposal_not_useful"
+  | "feasibility.proposal_converted";
 
 export interface EmitEventInput {
   tenantId: string;

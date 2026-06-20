@@ -12,6 +12,7 @@
     "db:seed": "tsx scripts/seed.ts",
     "verify:research": "tsx scripts/verify-research-lab.ts",
     "verify:pi": "tsx scripts/verify-property-intelligence.ts",
+    "verify:feasibility": "tsx scripts/verify-feasibility.ts",
     "test:integration": "tsx tests/integration/run1-isolation.ts",
     "test:acceptance": "npm run build && playwright test"
   },

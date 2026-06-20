@@ -80,3 +80,18 @@ export function sanitizeTags(values: string[]): CanonicalTag[] {
 export function tagLabel(tag: string): string {
   return tag.replace(/_/g, " ");
 }
+
+/** Canonical tags present in both sets — the basis for feasibility matching. */
+export function overlap(a: unknown, b: unknown): CanonicalTag[] {
+  const setB = new Set((Array.isArray(b) ? b : []).map(String));
+  const out: CanonicalTag[] = [];
+  const seen = new Set<string>();
+  for (const raw of Array.isArray(a) ? a : []) {
+    const t = String(raw);
+    if (isCanonicalTag(t) && setB.has(t) && !seen.has(t)) {
+      seen.add(t);
+      out.push(t);
+    }
+  }
+  return out;
+}

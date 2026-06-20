@@ -5,6 +5,22 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/devAuth";
 import { getScenario } from "@/lib/research/fixtures";
 import { reviewBrief, runSubject, withdrawConsent } from "@/lib/research/engine";
+import { evaluateFeasibility } from "@/lib/feasibility/engine";
+import { listTenantProperties } from "@/lib/repositories/propertyIntelligence";
+
+/**
+ * Evaluate feasible preparations for an approved brief against the property's
+ * private knowledge, then navigate to the result. Property = the tenant's
+ * primary property (server-resolved; never client-supplied).
+ */
+export async function evaluateFeasibilityAction(briefId: string) {
+  const { tenantId, userId } = await getAuthContext();
+  const props = await listTenantProperties(tenantId);
+  const property = props[0];
+  if (!property) return;
+  const result = await evaluateFeasibility(tenantId, userId, briefId, property.id);
+  redirect(`/dashboard/feasibility/${result.runId}`);
+}
 
 /**
  * Simulation-lab server actions. tenantId/userId always come from the server-side

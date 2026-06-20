@@ -22,6 +22,13 @@
       "when": 1781954923371,
       "tag": "0002_milky_layla_miller",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1781965200686,
+      "tag": "0003_red_william_stryker",
+      "breakpoints": true
     }
   ]
 }

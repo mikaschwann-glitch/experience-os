@@ -362,6 +362,38 @@ export async function seedDatabase() {
     freshness: "verify_before_use",
   });
 
+  // Wave 2C feasibility support — extra Atlantic knowledge for the scenarios.
+  await db.insert(propertyCapabilities).values({
+    tenantId,
+    propertyId: property.id,
+    title: "Local design corner",
+    description: "Lay out local design and architecture books for guests who appreciate them.",
+    categoryTags: ["design"],
+    suitableFor: ["quiet"],
+    hostEffort: "low",
+    costLevel: "low",
+  });
+  await db.insert(localInsights).values([
+    {
+      tenantId,
+      propertyId: property.id,
+      title: "Harbour fish market (hours vary)",
+      description: "A small harbour market — lovely, but the opening hours change week to week.",
+      categoryTags: ["food"],
+      suitableFor: ["quiet"],
+      freshness: "dynamic",
+    },
+    {
+      tenantId,
+      propertyId: property.id,
+      title: "Crater-lake viewpoint up the mountain road",
+      description: "A quiet viewpoint over the crater lake, reached only by the mountain road.",
+      categoryTags: ["nature", "adventure"],
+      suitableFor: ["adventure"],
+      freshness: "stable",
+    },
+  ]);
+
   await db.insert(propertyConstraints).values([
     {
       tenantId,
@@ -379,6 +411,7 @@ export async function seedDatabase() {
       description: "Never suggest anything requiring a car unless a transfer option is confirmed.",
       ruleType: "mobility",
       severity: "hard",
+      applicabilityTags: ["adventure"],
     },
   ]);
 
