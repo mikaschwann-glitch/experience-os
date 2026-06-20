@@ -75,7 +75,7 @@ export default async function ResearchLabPage() {
                   </div>
                   {runnable ? (
                     <form action={runScenarioAction.bind(null, s.key)}>
-                      <SubmitButton type="submit">
+                      <SubmitButton type="submit" data-testid={`run-${s.key}`}>
                         <Icon name="arrowRight" size={15} /> Run simulation
                       </SubmitButton>
                     </form>

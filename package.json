@@ -11,7 +11,9 @@
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "tsx scripts/seed.ts",
     "verify:research": "tsx scripts/verify-research-lab.ts",
-    "verify:pi": "tsx scripts/verify-property-intelligence.ts"
+    "verify:pi": "tsx scripts/verify-property-intelligence.ts",
+    "test:integration": "tsx tests/integration/run1-isolation.ts",
+    "test:acceptance": "npm run build && playwright test"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
@@ -21,6 +23,7 @@
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

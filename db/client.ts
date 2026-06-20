@@ -37,6 +37,15 @@ export function getDb(): PostgresJsDatabase<typeof schema> {
   return db;
 }
 
+// Close the lazily-created pool (used by test setup so processes don't hang).
+export async function closeDb(): Promise<void> {
+  if (sql) {
+    await sql.end({ timeout: 5 });
+    sql = undefined;
+    db = undefined;
+  }
+}
+
 export type Database = PostgresJsDatabase<typeof schema>;
 
 // A query executor that is either the root db or an open transaction.
