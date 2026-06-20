@@ -6,6 +6,7 @@ import {
   listActiveCapabilities,
   listTenantProperties,
 } from "@/lib/repositories/propertyIntelligence";
+import { listLearningDrafts } from "@/lib/repositories/learning";
 import {
   CONTEXT_TAGS,
   TOPIC_CATEGORIES,
@@ -33,9 +34,23 @@ import {
   setConstraintActiveAction,
   setInsightStatusAction,
   setPlaybookStatusAction,
+  promoteLearningDraftAction,
+  discardLearningDraftAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
+
+const LEARNING_TYPE_LABEL: Record<string, string> = {
+  local_insight: "Local insight",
+  constraint: "Constraint",
+  capability: "Capability",
+  playbook: "Playbook action",
+};
+
+function draftTitle(note: string): string {
+  const oneLine = note.replace(/\s+/g, " ").trim();
+  return oneLine.length <= 72 ? oneLine : oneLine.slice(0, 69).trimEnd() + "…";
+}
 
 function PiStatus({ status }: { status: string }) {
   const map: Record<string, { bg: string; fg: string }> = {
@@ -196,6 +211,8 @@ export default async function PropertyIntelligencePage({
     selected.id,
   );
   const activeCaps = await listActiveCapabilities(tenantId, selected.id);
+  // Wave 2D — open learning drafts captured from outcomes, awaiting host review.
+  const learningDrafts = await listLearningDrafts(tenantId, selected.id);
 
   return (
     <div>
@@ -276,6 +293,76 @@ export default async function PropertyIntelligencePage({
           </form>
         </Card>
       </div>
+
+      {/* ===== Learning drafts (captured from outcomes; awaiting review) ===== */}
+      {learningDrafts.length > 0 ? (
+        <section className="mt-6" data-testid="learning-drafts">
+          <SectionTitle>Learning drafts</SectionTitle>
+          <p className="mt-1 mb-3 text-[12.5px] leading-relaxed" style={{ color: C.muted }}>
+            Captured from completed outcomes. Nothing here is active knowledge until you promote it.
+          </p>
+          <div className="space-y-2">
+            {learningDrafts.map((d) => {
+              const dtags = Array.isArray(d.tags) ? (d.tags as string[]) : [];
+              return (
+                <Card key={d.id} className="p-4" style={{ borderColor: C.stone }}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="text-[14px] font-medium" style={{ color: C.ink }}>
+                      {d.note}
+                    </div>
+                    <span
+                      className="shrink-0 rounded-full px-2.5 py-[2px] text-[11px] font-medium"
+                      style={{ background: C.clayLight, color: C.clayDark }}
+                    >
+                      → {LEARNING_TYPE_LABEL[d.learningType] ?? d.learningType}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-[11.5px]" style={{ color: C.muted }}>
+                    From a logged outcome
+                    {d.feasibilityProposalId ? " · via a feasibility proposal" : ""}
+                  </div>
+                  {dtags.length > 0 ? <Chips values={dtags} /> : null}
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <details data-testid="promote-draft">
+                      <summary
+                        className="flex cursor-pointer items-center gap-1.5 text-[12.5px] font-medium [&::-webkit-details-marker]:hidden"
+                        style={{ listStyleType: "none", color: C.clay }}
+                      >
+                        <Icon name="check" size={14} /> Review and promote
+                      </summary>
+                      <form
+                        action={promoteLearningDraftAction.bind(null, d.id, selected.id)}
+                        className="mt-3 space-y-2"
+                      >
+                        <Field label="Title for the new item (editable)">
+                          <TextInput name="title" defaultValue={draftTitle(d.note)} required />
+                        </Field>
+                        {d.learningType === "constraint" ? (
+                          <Field label="Severity">
+                            <Select name="severity" defaultValue="soft" style={{ width: 200 }}>
+                              <option value="soft">Soft (prefer to avoid)</option>
+                              <option value="hard">Hard (never)</option>
+                            </Select>
+                          </Field>
+                        ) : null}
+                        <SubmitButton type="submit">
+                          Promote to {LEARNING_TYPE_LABEL[d.learningType] ?? "item"}
+                        </SubmitButton>
+                      </form>
+                    </details>
+                    <form action={discardLearningDraftAction.bind(null, d.id, selected.id)}>
+                      <SubmitButton type="submit" variant="ghost" style={{ padding: "4px 10px", fontSize: 12 }}>
+                        Discard
+                      </SubmitButton>
+                    </form>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       {/* ===== A. Capabilities ===== */}
       <Section

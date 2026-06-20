@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/devAuth";
 import { getGuestMemory } from "@/lib/repositories/guests";
+import { canCaptureLearning, listDraftStateForGuest } from "@/lib/repositories/learning";
+import { CONTEXT_TAGS, TOPIC_CATEGORIES, tagLabel } from "@/lib/domain/vocabulary";
 import {
   Avatar,
   Card,
@@ -27,7 +29,15 @@ import {
   createSignalAction,
   dismissRecommendationAction,
   logOutcomeAction,
+  captureLearningAction,
 } from "./actions";
+
+const LEARNING_TYPE_LABEL: Record<string, string> = {
+  local_insight: "Local insight",
+  constraint: "Constraint / no-go rule",
+  capability: "Property capability",
+  playbook: "Preparation playbook action",
+};
 
 export const dynamic = "force-dynamic";
 
@@ -79,6 +89,20 @@ export default async function GuestMemoryPage({
 
   const { guest, stays, signals, insights, recommendations, hostActions, outcomes, events } =
     memory;
+  // Wave 2D — which outcomes already have a learning draft (any status), so the
+  // capture prompt shows its captured state instead of re-prompting.
+  const draftByOutcome = await listDraftStateForGuest(tenantId, guestId);
+  // Per-outcome capture availability (only for outcomes that could show the form):
+  // capture is offered ONLY when an authoritative, causally-linked property
+  // resolves — otherwise the UI shows an "unavailable" note (no raw error).
+  const captureAvailable = new Map<string, boolean>();
+  await Promise.all(
+    outcomes
+      .filter((o) => !draftByOutcome.get(o.id))
+      .map(async (o) => {
+        captureAvailable.set(o.id, await canCaptureLearning(tenantId, o.id));
+      }),
+  );
   const primaryStay = stays[0] ?? null;
   const contact = [guest.email, guest.language, guest.country].filter(Boolean).join(" · ");
 
@@ -338,36 +362,111 @@ export default async function GuestMemoryPage({
             </div>
           </section>
 
-          {/* Outcomes */}
+          {/* Outcomes -> optional property-learning capture */}
           {outcomes.length > 0 ? (
             <section>
               <SectionTitle>Outcomes</SectionTitle>
-              <Card className="mt-3 p-4">
-                <ul className="space-y-3">
-                  {outcomes.map((o) => (
-                    <li key={o.id} className="flex items-start justify-between gap-3">
-                      <div className="flex items-start gap-3">
-                        <span className="mt-0.5 shrink-0" style={{ color: C.clay }}>
-                          <Icon name="check" size={16} />
-                        </span>
-                        <div>
-                          <div className="text-[13px] font-medium capitalize" style={{ color: C.ink }}>
-                            {o.result}
-                          </div>
-                          {o.notes ? (
-                            <div className="text-[12.5px]" style={{ color: C.muted }}>
-                              {o.notes}
+              <div className="mt-3 space-y-3">
+                {outcomes.map((o) => {
+                  const draft = draftByOutcome.get(o.id);
+                  return (
+                    <Card key={o.id} className="p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 shrink-0" style={{ color: C.clay }}>
+                            <Icon name="check" size={16} />
+                          </span>
+                          <div>
+                            <div className="text-[13px] font-medium capitalize" style={{ color: C.ink }}>
+                              {o.result}
                             </div>
-                          ) : null}
+                            {o.notes ? (
+                              <div className="text-[12.5px]" style={{ color: C.muted }}>
+                                {o.notes}
+                              </div>
+                            ) : null}
+                          </div>
                         </div>
+                        <span className="shrink-0 text-[11.5px]" style={{ color: C.muted }}>
+                          {fmt(o.occurredAt)}
+                        </span>
                       </div>
-                      <span className="shrink-0 text-[11.5px]" style={{ color: C.muted }}>
-                        {fmt(o.occurredAt)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </Card>
+
+                      {/* Capture-a-learning prompt (optional; collapsed by default). */}
+                      <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${C.soft}` }}>
+                        {draft ? (
+                          <div className="flex items-center gap-2 text-[12.5px]" style={{ color: C.muted }}>
+                            <Icon name="recommend" size={14} />
+                            <span>
+                              Learning {draft.status === "promoted" ? "promoted to Property Intelligence" : draft.status === "discarded" ? "discarded" : "saved as a draft"}
+                              {" · "}
+                              {LEARNING_TYPE_LABEL[draft.learningType] ?? draft.learningType}
+                            </span>
+                          </div>
+                        ) : captureAvailable.get(o.id) ? (
+                          <details data-testid="capture-learning">
+                            <summary
+                              className="flex cursor-pointer items-center gap-1.5 text-[12.5px] font-medium [&::-webkit-details-marker]:hidden"
+                              style={{ listStyleType: "none", color: C.clay }}
+                            >
+                              <Icon name="plus" size={14} /> Capture a property learning
+                            </summary>
+                            <form
+                              action={captureLearningAction.bind(null, o.id, guest.id)}
+                              className="mt-3 space-y-2"
+                            >
+                              <div className="text-[12px]" style={{ color: C.muted }}>
+                                What should this property remember from this?
+                              </div>
+                              <TextArea
+                                name="note"
+                                rows={2}
+                                required
+                                placeholder="e.g. “Early breakfast works well when arranged the evening before.”"
+                              />
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Select name="learningType" defaultValue="local_insight" style={{ width: 230 }}>
+                                  <option value="local_insight">Local insight</option>
+                                  <option value="constraint">Constraint / no-go rule</option>
+                                  <option value="capability">Property capability</option>
+                                  <option value="playbook">Preparation playbook action</option>
+                                </Select>
+                                <SubmitButton type="submit" variant="ghost">
+                                  Save learning draft
+                                </SubmitButton>
+                              </div>
+                              <details className="pt-1">
+                                <summary className="cursor-pointer text-[12px] font-medium" style={{ color: C.clay }}>
+                                  Add relevance tags (optional)
+                                </summary>
+                                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5">
+                                  {[...TOPIC_CATEGORIES, ...CONTEXT_TAGS].map((t) => (
+                                    <label key={t} className="flex items-center gap-1.5 text-[12px]" style={{ color: C.ink }}>
+                                      <input type="checkbox" name="tags" value={t} /> {tagLabel(t)}
+                                    </label>
+                                  ))}
+                                </div>
+                              </details>
+                              <div className="text-[11px]" style={{ color: C.muted }}>
+                                Optional — saved as a draft for your review in Property Intelligence. Nothing is added automatically.
+                              </div>
+                            </form>
+                          </details>
+                        ) : (
+                          <div
+                            className="flex items-center gap-2 text-[12.5px]"
+                            style={{ color: C.muted }}
+                            data-testid="capture-unavailable"
+                          >
+                            <Icon name="circle" size={14} />
+                            <span>No property is linked to this action — capture unavailable.</span>
+                          </div>
+                        )}
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
             </section>
           ) : null}
         </div>

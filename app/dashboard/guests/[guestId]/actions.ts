@@ -10,6 +10,7 @@ import {
   logOutcome,
   setRecommendationStatus,
 } from "@/lib/repositories/slice";
+import { captureLearning, type LearningType } from "@/lib/repositories/learning";
 
 /**
  * Server actions for the manual vertical slice. Each one resolves tenant/user
@@ -102,4 +103,29 @@ export async function logOutcomeAction(
   const notes = String(formData.get("notes") ?? "").trim();
   await logOutcome(tenantId, userId, hostActionId, { result, notes: notes || null });
   revalidateGuest(guestId);
+}
+
+/**
+ * Wave 2D — optional property-learning capture from a completed outcome.
+ * The no-learning path is simply an empty note: no draft is created. Property is
+ * resolved server-side from the outcome's provenance (never sent by the client);
+ * this only ever creates a DRAFT, never a Property Intelligence record.
+ */
+const LEARNING_TYPES = ["local_insight", "constraint", "capability", "playbook"] as const;
+export async function captureLearningAction(
+  outcomeId: string,
+  guestId: string,
+  formData: FormData,
+) {
+  const { tenantId, userId } = await getAuthContext();
+  const note = String(formData.get("note") ?? "").trim();
+  if (!note) return; // no-learning path → nothing is stored
+  const raw = String(formData.get("learningType") ?? "local_insight");
+  const learningType = (LEARNING_TYPES as readonly string[]).includes(raw)
+    ? (raw as LearningType)
+    : "local_insight";
+  const tags = formData.getAll("tags").map(String);
+  await captureLearning(tenantId, userId, outcomeId, { learningType, note, tags });
+  revalidateGuest(guestId);
+  revalidatePath("/dashboard/property-intelligence");
 }

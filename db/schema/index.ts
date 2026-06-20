@@ -398,3 +398,7 @@ export * from "./propertyIntelligence";
 
 // Wave 2C — Feasibility Engine tables (additive; references the above + research/PI).
 export * from "./feasibility";
+
+// Wave 2D — Outcome → Property Learning Loop (additive; FKs into Run 1 +
+// feasibility, so it must be re-exported AFTER the tables it references).
+export * from "./learning";

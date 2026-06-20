@@ -46,7 +46,12 @@ export type DomainEventType =
   | "feasibility.proposal_accepted"
   | "feasibility.proposal_rejected"
   | "feasibility.proposal_not_useful"
-  | "feasibility.proposal_converted";
+  | "feasibility.proposal_converted"
+  // Wave 2D — Outcome → Property Learning Loop (additive; PII-light: ids/type
+  // only, never the host's free-text note).
+  | "learning.draft_created"
+  | "learning.draft_promoted"
+  | "learning.draft_discarded";
 
 export interface EmitEventInput {
   tenantId: string;

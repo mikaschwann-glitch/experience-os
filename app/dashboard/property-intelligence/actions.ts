@@ -12,6 +12,10 @@ import {
   setInsightStatus,
   setPlaybookStatus,
 } from "@/lib/repositories/propertyIntelligence";
+import {
+  discardLearningDraft,
+  promoteLearningDraft,
+} from "@/lib/repositories/learning";
 
 /**
  * Property Intelligence server actions. tenantId/userId always come from the
@@ -140,4 +144,27 @@ export async function setConstraintActiveAction(id: string, active: boolean) {
   const { tenantId, userId } = await getAuthContext();
   await setConstraintActive(tenantId, userId, id, active);
   revalidatePath(PATH);
+}
+
+// ---- Wave 2D — Learning drafts review ----
+// The draft's own property_id (server-trusted) decides where the promoted item
+// lands; the propertyId param here only keeps the host on the right property tab.
+export async function promoteLearningDraftAction(
+  draftId: string,
+  propertyId: string,
+  fd: FormData,
+) {
+  const { tenantId, userId } = await getAuthContext();
+  const title = s(fd, "title") || null;
+  const severity = s(fd, "severity") === "hard" ? "hard" : "soft";
+  await promoteLearningDraft(tenantId, userId, draftId, { title, severity });
+  revalidatePath(PATH);
+  revalidatePath(`${PATH}?property=${propertyId}`);
+}
+
+export async function discardLearningDraftAction(draftId: string, propertyId: string) {
+  const { tenantId, userId } = await getAuthContext();
+  await discardLearningDraft(tenantId, userId, draftId);
+  revalidatePath(PATH);
+  revalidatePath(`${PATH}?property=${propertyId}`);
 }

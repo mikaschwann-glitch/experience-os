@@ -13,6 +13,7 @@
     "verify:research": "tsx scripts/verify-research-lab.ts",
     "verify:pi": "tsx scripts/verify-property-intelligence.ts",
     "verify:feasibility": "tsx scripts/verify-feasibility.ts",
+    "verify:learning-loop": "tsx scripts/verify-learning-loop.ts",
     "test:integration": "tsx tests/integration/run1-isolation.ts",
     "test:acceptance": "npm run build && playwright test"
   },
