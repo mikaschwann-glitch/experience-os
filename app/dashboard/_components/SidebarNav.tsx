@@ -13,6 +13,8 @@ const NAV: { label: string; href: string; icon: IconName }[] = [
   { label: "Today", href: "/dashboard", icon: "today" },
   { label: "Guests", href: "/dashboard/guests", icon: "guests" },
   { label: "Recommendations", href: "/dashboard/recommendations", icon: "recommend" },
+  { label: "Research Lab", href: "/dashboard/research-lab", icon: "clipboard" },
+  { label: "Property Intelligence", href: "/dashboard/property-intelligence", icon: "note" },
   { label: "Properties", href: "/dashboard/properties", icon: "properties" },
 ];
 
@@ -28,7 +30,10 @@ export function SidebarNav({
   const pathname = usePathname();
 
   return (
-    <aside className="flex w-[236px] shrink-0 flex-col" style={{ background: C.basalt }}>
+    <aside
+      className="flex w-[236px] shrink-0 flex-col overflow-y-auto"
+      style={{ background: C.basalt }}
+    >
       <div className="px-5 pb-5 pt-6">
         <div className="text-[15.5px] font-semibold tracking-tight" style={{ color: C.sideActive }}>
           {propertyName}

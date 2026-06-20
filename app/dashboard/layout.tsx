@@ -19,7 +19,12 @@ export default async function DashboardLayout({
   });
 
   return (
-    <div className="flex min-h-screen" style={{ background: C.paper, fontFamily: FONT, color: C.ink }}>
+    // Fixed-height app shell: the charcoal sidebar stays put while only the main
+    // area scrolls, so navigation is always reachable from anywhere on the page.
+    <div
+      className="flex h-screen overflow-hidden"
+      style={{ background: C.paper, fontFamily: FONT, color: C.ink }}
+    >
       <SidebarNav propertyName={tenantName} subtitle="São Miguel · 8 cabins" userName={userName} />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -48,7 +53,7 @@ export default async function DashboardLayout({
           </div>
         </header>
 
-        <main className="min-w-0 flex-1">
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-[1180px] px-8 py-8">{children}</div>
         </main>
       </div>

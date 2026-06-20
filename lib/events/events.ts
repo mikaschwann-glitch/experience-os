@@ -16,7 +16,30 @@ export type DomainEventType =
   | "recommendation.dismissed"
   | "host_action.created"
   | "host_action.updated"
-  | "outcome.created";
+  | "outcome.created"
+  // Wave 2A — Pre-Arrival Intelligence Simulation Lab lifecycle (additive; PII-light payloads).
+  | "consent.granted"
+  | "consent.withdrawn"
+  | "research.refused"
+  | "research.started"
+  | "research.needs_review"
+  | "research.completed"
+  | "research.aborted"
+  | "research.deleted"
+  | "identity.resolved"
+  | "policy.blocked"
+  | "brief.created"
+  | "brief.approved"
+  | "brief.rejected"
+  | "brief.edited"
+  | "brief.not_useful"
+  | "brief.revoked"
+  // Wave 2B — Property Intelligence lifecycle (additive; PII-light payloads,
+  // entityType identifies capability/insight/constraint/playbook).
+  | "property_intelligence.created"
+  | "property_intelligence.updated"
+  | "property_intelligence.archived"
+  | "property_intelligence.restored";
 
 export interface EmitEventInput {
   tenantId: string;

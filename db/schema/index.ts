@@ -387,3 +387,11 @@ export const events = pgTable(
     index("events_entity_idx").on(t.entityType, t.entityId),
   ],
 );
+
+// Wave 2A — Pre-Arrival Intelligence Simulation Lab tables (separate file).
+// Re-export must stay last so the base tables above are defined before research.ts
+// (which references them) is evaluated.
+export * from "./research";
+
+// Wave 2B — Property Intelligence tables (additive; references tenants + properties above).
+export * from "./propertyIntelligence";

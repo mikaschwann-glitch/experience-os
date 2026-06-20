@@ -9,7 +9,9 @@
     "lint": "eslint",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:seed": "tsx scripts/seed.ts"
+    "db:seed": "tsx scripts/seed.ts",
+    "verify:research": "tsx scripts/verify-research-lab.ts",
+    "verify:pi": "tsx scripts/verify-property-intelligence.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",

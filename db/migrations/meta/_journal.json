@@ -8,6 +8,20 @@
       "when": 1781798174747,
       "tag": "0000_cheerful_starfox",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1781879202744,
+      "tag": "0001_common_gorilla_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781954923371,
+      "tag": "0002_milky_layla_miller",
+      "breakpoints": true
     }
   ]
 }

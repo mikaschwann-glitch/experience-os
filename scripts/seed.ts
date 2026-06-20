@@ -9,15 +9,21 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import {
+  consentGrants,
   consents,
   guests,
   integrationConnections,
+  localInsights,
+  preparationPlaybookActions,
   properties,
+  propertyCapabilities,
+  propertyConstraints,
   stays,
   tenants,
   units,
   users,
 } from "@/db/schema";
+import { allSubjects } from "@/lib/research/fixtures";
 import { emitEvent } from "@/lib/events/events";
 import {
   createHostAction,
@@ -264,11 +270,152 @@ async function main() {
     effort: "low",
   });
 
+  // ---- Wave 2A: Pre-Arrival Intelligence Simulation Lab fixtures ----
+  // Fictional guests for the research lab. Stays are set in the PAST (departed) so
+  // they never appear on the Today dashboard and do not disturb Run 1 demo numbers.
+  const [simProperty] = await db
+    .insert(properties)
+    .values({ tenantId, name: "Research Lab (Simulation)", location: "Fixtures · not a real place" })
+    .returning();
+  const [simUnit] = await db
+    .insert(units)
+    .values({ tenantId, propertyId: simProperty.id, name: "Sim Cabin", type: "simulation", capacity: 2 })
+    .returning();
+
+  let labGuestCount = 0;
+  for (const { subject } of allSubjects()) {
+    const [g] = await db
+      .insert(guests)
+      .values({
+        tenantId,
+        fullName: subject.profile.fullName,
+        email: subject.profile.email,
+        language: subject.profile.language,
+        country: subject.profile.country,
+      })
+      .returning();
+    labGuestCount += 1;
+
+    await db.insert(stays).values({
+      tenantId,
+      guestId: g.id,
+      unitId: simUnit.id,
+      propertyId: simProperty.id,
+      startDate: fmt(addDays(today, -40)),
+      endDate: fmt(addDays(today, -35)),
+      status: "departed",
+      visitNumber: 1,
+      valueAmountCents: 120000,
+      currency: "EUR",
+    });
+
+    // Consent grant per scenario state. 'none' => no row at all.
+    if (subject.consent === "granted") {
+      await db.insert(consentGrants).values({
+        tenantId,
+        guestId: g.id,
+        scope: "prearrival_research",
+        status: "granted",
+        grantedAt: new Date(),
+      });
+    } else if (subject.consent === "withdrawn") {
+      await db.insert(consentGrants).values({
+        tenantId,
+        guestId: g.id,
+        scope: "prearrival_research",
+        status: "withdrawn",
+        grantedAt: addDays(today, -2),
+        withdrawnAt: new Date(),
+      });
+    }
+  }
+
+  // ---- Wave 2B: Property Intelligence demo (Atlantic Hideaway property only) ----
+  // Fictional simulation content. No real businesses, partners, or live claims.
+  // Attached to the real Atlantic Hideaway property so the other (simulation)
+  // property stays empty — demonstrating property-scoped isolation.
+  await db.insert(propertyCapabilities).values({
+    tenantId,
+    propertyId: property.id,
+    title: "Early breakfast from 06:30",
+    description: "Breakfast can be prepared and served from 06:30 if arranged the evening before.",
+    categoryTags: ["food"],
+    suitableFor: ["sunrise", "quiet"],
+    leadTime: "evening before",
+    hostEffort: "low",
+    costLevel: "low",
+  });
+  await db.insert(propertyCapabilities).values({
+    tenantId,
+    propertyId: property.id,
+    title: "Hand-drawn route card",
+    description: "A simple hand-drawn map to a quiet local route can be left in the cabin.",
+    categoryTags: ["nature", "hiking"],
+    suitableFor: ["quiet"],
+    hostEffort: "low",
+    costLevel: "none",
+  });
+
+  await db.insert(localInsights).values({
+    tenantId,
+    propertyId: property.id,
+    title: "Quiet coastal route (good weather only)",
+    description:
+      "The coastal route is calm and beautiful before 08:00, but only in good weather. Avoid Saturday mornings.",
+    categoryTags: ["nature", "hiking"],
+    suitableFor: ["quiet", "sunrise"],
+    bestTimeOfDay: "before 08:00",
+    weatherDependency: "good weather only",
+    freshness: "verify_before_use",
+  });
+
+  await db.insert(propertyConstraints).values([
+    {
+      tenantId,
+      propertyId: property.id,
+      title: "Avoid Saturday-morning crowds on the coastal route",
+      description: "Do not suggest the coastal route on Saturday mornings — it gets crowded.",
+      ruleType: "timing",
+      severity: "soft",
+      applicabilityTags: ["nature"],
+    },
+    {
+      tenantId,
+      propertyId: property.id,
+      title: "No car-dependent suggestions without a transfer",
+      description: "Never suggest anything requiring a car unless a transfer option is confirmed.",
+      ruleType: "mobility",
+      severity: "hard",
+    },
+  ]);
+
+  await db.insert(preparationPlaybookActions).values([
+    {
+      tenantId,
+      propertyId: property.id,
+      title: "Prepare a local craft note",
+      description: "Leave a short handwritten note about a local craftsperson.",
+      suitableFor: ["quiet"],
+      hostEffort: "low",
+      costLevel: "low",
+    },
+    {
+      tenantId,
+      propertyId: property.id,
+      title: "Arrange transfer (after partner confirmation)",
+      description: "Coordinate a transfer only once a partner has confirmed availability.",
+      linkedCapabilityId: null,
+      hostEffort: "medium",
+      costLevel: "medium",
+    },
+  ]);
+
   console.log("Seed complete:");
   console.log("  tenant:", tenant.slug, tenantId);
   console.log("  user:  ", user.email);
   console.log("  guests: Maria & Tom, The Lunds, The Aaltos");
   console.log("  slice:  signal -> insight -> recommendation -> accepted -> host action -> outcome");
+  console.log(`  research-lab subjects seeded: ${labGuestCount} (consent grants per scenario)`);
 }
 
 main()
