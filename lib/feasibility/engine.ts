@@ -24,6 +24,7 @@ import {
   properties,
   propertyCapabilities,
   propertyConstraints,
+  stays,
 } from "@/db/schema";
 import { emitEvent } from "@/lib/events/events";
 import { overlap, tagLabel } from "@/lib/domain/vocabulary";
@@ -131,7 +132,7 @@ export async function evaluateFeasibility(
   tenantId: string,
   userId: string,
   briefId: string,
-  propertyId: string,
+  requestedPropertyId?: string,
   override?: Partial<SimContext>,
 ): Promise<EvaluateResult> {
   const db = getDb();
@@ -143,8 +144,33 @@ export async function evaluateFeasibility(
     .limit(1);
   if (!brief) throw new Error("Brief not found for this tenant.");
 
-  // The host evaluates a brief against a chosen property's knowledge. Never trust
-  // a client property id: verify it belongs to this tenant.
+  // Authoritative property = the property of the brief's stay (if any). The brief
+  // is ALWAYS evaluated against that property's knowledge — never the wrong one.
+  let authoritativePropertyId: string | null = null;
+  if (brief.stayId) {
+    const [stay] = await db
+      .select({ propertyId: stays.propertyId })
+      .from(stays)
+      .where(and(eq(stays.tenantId, tenantId), eq(stays.id, brief.stayId)))
+      .limit(1);
+    authoritativePropertyId = stay?.propertyId ?? null;
+  }
+
+  // Resolve the effective property + guard (defense in depth; never trust the UI).
+  let propertyId: string;
+  if (authoritativePropertyId) {
+    if (requestedPropertyId && requestedPropertyId !== authoritativePropertyId) {
+      throw new Error("Property does not match the brief's stay — refusing inconsistent property.");
+    }
+    propertyId = authoritativePropertyId;
+  } else {
+    if (!requestedPropertyId) {
+      throw new Error("This brief has no assigned property; a property must be selected.");
+    }
+    propertyId = requestedPropertyId;
+  }
+
+  // Never trust a client property id: verify it belongs to this tenant.
   const [prop] = await db
     .select({ id: properties.id })
     .from(properties)

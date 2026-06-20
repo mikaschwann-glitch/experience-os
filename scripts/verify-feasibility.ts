@@ -8,6 +8,7 @@ import { getDb } from "@/db/client";
 import {
   feasibilityProposalEvidence,
   feasibilityProposals,
+  feasibilityRuns,
   guests,
   hostActions,
   prearrivalBriefs,
@@ -142,19 +143,42 @@ async function main() {
   check("hard constraint: car-dependent candidate is withheld", !!hardBlocked);
   check("hard constraint: blocked candidate is NOT actionable", cp.every((p) => !(p.status !== "withheld" && p.reasonCode === "hard_constraint")));
 
-  // ===== No-match + property isolation: Greta's brief against the empty sim property =====
-  const simRun = await evaluateFeasibility(tenantId, userId, gretaBrief.id, sim.id);
-  const simProps = await proposalsOf(simRun.runId);
-  check("no-match/isolation: empty property yields no proposals", simRun.status === "completed" && simProps.length === 0);
+  // ===== Wave 2C.1: multi-property correctness =====
+  const pineRidge = await propByName("Pine Ridge Cabins");
+  // Liam's stay is on Pine Ridge → evaluation uses Pine Ridge knowledge ONLY.
+  await runScenario("disallowed_source");
+  const liam = (await getGuestByName(tenantId, "Liam O'Connor"))!;
+  const liamBrief = (await latestBrief(liam.id))!;
+  await reviewBrief(tenantId, userId, liamBrief.id, "approved");
+  const liamRun = await evaluateFeasibility(tenantId, userId, liamBrief.id); // authoritative = Pine Ridge
+  const [liamRunRow] = await db.select().from(feasibilityRuns).where(and(eq(feasibilityRuns.tenantId, tenantId), eq(feasibilityRuns.id, liamRun.runId))).limit(1);
+  const lp = JSON.stringify(await proposalsOf(liamRun.runId));
+  check("multi-property: run bound to the brief's authoritative property (Pine Ridge)", liamRunRow.propertyId === pineRidge.id);
+  check("multi-property: Property B brief uses Property B knowledge", lp.includes("Pine Ridge woodcraft"));
+  check("multi-property: Property B brief does NOT use Property A knowledge", !lp.includes("Atlantic craft note"));
+  check("multi-property: Property A brief does NOT use Property B knowledge", !JSON.stringify(gp).includes("Pine Ridge woodcraft"));
+  await expectThrow("guard: a different same-tenant property is rejected (inconsistent with stay)", () =>
+    evaluateFeasibility(tenantId, userId, gretaBrief.id, pineRidge.id),
+  );
 
-  // ===== Cross-tenant: cannot evaluate a brief against another tenant's property =====
+  // ===== No-match: Yusuf's stay is on the empty sim property =====
+  await runScenario("non_actionable_context");
+  const yusuf = (await getGuestByName(tenantId, "Yusuf Demir"))!;
+  const yusufBrief = (await latestBrief(yusuf.id))!;
+  await reviewBrief(tenantId, userId, yusufBrief.id, "approved");
+  const yusufRun = await evaluateFeasibility(tenantId, userId, yusufBrief.id); // authoritative = empty sim property
+  const yp = await proposalsOf(yusufRun.runId);
+  check("no-match: empty authoritative property yields no proposals", yusufRun.status === "completed" && yp.length === 0);
+
+  // ===== Cross-tenant: another tenant's property is rejected =====
   const [beta] = await db.insert(tenants).values({ name: "Beta Retreat", slug: "beta-retreat-feas-test" }).returning();
   const [betaProp] = await db.insert(properties).values({ tenantId: beta.id, name: "Beta Property" }).returning();
-  await expectThrow("cross-tenant: brief cannot be evaluated against tenant B's property", () =>
+  await expectThrow("cross-tenant: another tenant's property is rejected", () =>
     evaluateFeasibility(tenantId, userId, gretaBrief.id, betaProp.id),
   );
   check("cross-tenant: tenant scoping kept on proposals", gp.every((p) => p.tenantId === tenantId));
   void guests;
+  void sim;
 
   console.log(`\nFeasibility verification: ${pass} passed, ${fail} failed.`);
   if (fail > 0) process.exit(1);

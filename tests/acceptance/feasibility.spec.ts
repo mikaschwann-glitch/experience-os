@@ -38,6 +38,20 @@ test.describe("Feasibility engine acceptance", () => {
     await expect(page.getByTestId("evaluate-feasibility")).toHaveCount(0);
   });
 
+  test("Multi-property: a brief on a non-primary property uses only that property's knowledge", async ({ page }) => {
+    await page.goto("/dashboard/research-lab");
+    await page.getByTestId("run-disallowed_source").click(); // Liam — stay on Pine Ridge
+    await expect(page).toHaveURL(JOB_URL);
+    await page.getByRole("button", { name: "Approve" }).click();
+    // UI visibly identifies the correct (non-primary) property
+    await expect(page.getByTestId("eval-property")).toContainText("Pine Ridge Cabins");
+    await page.getByTestId("evaluate-feasibility").click();
+    await expect(page).toHaveURL(FEAS_URL);
+    // only Pine Ridge knowledge appears; primary (Atlantic) knowledge never leaks
+    await expect(page.getByText("Pine Ridge woodcraft").first()).toBeVisible();
+    await expect(page.getByText("Atlantic craft note")).toHaveCount(0);
+  });
+
   test("Hard constraint: car-dependent proposal is withheld, not actionable", async ({ page }) => {
     await page.goto("/dashboard/research-lab");
     await page.getByTestId("run-multi_guest_mixed_consent").click();

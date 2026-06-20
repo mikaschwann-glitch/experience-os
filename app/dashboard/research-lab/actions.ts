@@ -6,19 +6,26 @@ import { getAuthContext } from "@/lib/auth/devAuth";
 import { getScenario } from "@/lib/research/fixtures";
 import { reviewBrief, runSubject, withdrawConsent } from "@/lib/research/engine";
 import { evaluateFeasibility } from "@/lib/feasibility/engine";
-import { listTenantProperties } from "@/lib/repositories/propertyIntelligence";
+import { getBriefAuthoritativeProperty } from "@/lib/repositories/feasibility";
 
 /**
- * Evaluate feasible preparations for an approved brief against the property's
- * private knowledge, then navigate to the result. Property = the tenant's
- * primary property (server-resolved; never client-supplied).
+ * Evaluate feasible preparations for an approved brief against the CORRECT
+ * property's knowledge:
+ *  - if the brief's stay has a property, that property is authoritative (locked);
+ *  - otherwise the host must explicitly choose a tenant-owned property.
+ * The engine re-guards this; the UI is never trusted alone.
  */
-export async function evaluateFeasibilityAction(briefId: string) {
+export async function evaluateFeasibilityAction(briefId: string, formData?: FormData) {
   const { tenantId, userId } = await getAuthContext();
-  const props = await listTenantProperties(tenantId);
-  const property = props[0];
-  if (!property) return;
-  const result = await evaluateFeasibility(tenantId, userId, briefId, property.id);
+  const authoritative = await getBriefAuthoritativeProperty(tenantId, briefId);
+  let propertyId: string | undefined;
+  if (authoritative) {
+    propertyId = authoritative.id;
+  } else {
+    propertyId = String(formData?.get("propertyId") ?? "").trim() || undefined;
+    if (!propertyId) return; // host must choose a property first
+  }
+  const result = await evaluateFeasibility(tenantId, userId, briefId, propertyId);
   redirect(`/dashboard/feasibility/${result.runId}`);
 }
 

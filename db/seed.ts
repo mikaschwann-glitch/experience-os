@@ -275,6 +275,17 @@ export async function seedDatabase() {
     .values({ tenantId, propertyId: simProperty.id, name: "Sim Cabin", type: "simulation", capacity: 2 })
     .returning();
 
+  // Wave 2C.1: a SECOND real property (with its own distinct knowledge) so
+  // multi-property feasibility correctness can be exercised.
+  const [pineRidge] = await db
+    .insert(properties)
+    .values({ tenantId, name: "Pine Ridge Cabins", location: "São Miguel · second property" })
+    .returning();
+  const [pineUnit] = await db
+    .insert(units)
+    .values({ tenantId, propertyId: pineRidge.id, name: "Cedar Cabin", type: "cabin", capacity: 2 })
+    .returning();
+
   let labGuestCount = 0;
   for (const { subject } of allSubjects()) {
     const [g] = await db
@@ -289,11 +300,21 @@ export async function seedDatabase() {
       .returning();
     labGuestCount += 1;
 
+    // Research guests stay at the real property whose knowledge applies.
+    // Liam → Pine Ridge (multi-property demo); Yusuf → empty sim property
+    // (no-match); everyone else → Atlantic Hideaway (the primary knowledge property).
+    const target =
+      subject.profile.fullName === "Liam O'Connor"
+        ? { propertyId: pineRidge.id, unitId: pineUnit.id }
+        : subject.profile.fullName === "Yusuf Demir"
+          ? { propertyId: simProperty.id, unitId: simUnit.id }
+          : { propertyId: property.id, unitId: ocean.id };
+
     await db.insert(stays).values({
       tenantId,
       guestId: g.id,
-      unitId: simUnit.id,
-      propertyId: simProperty.id,
+      unitId: target.unitId,
+      propertyId: target.propertyId,
       startDate: fmt(addDays(today, -40)),
       endDate: fmt(addDays(today, -35)),
       status: "departed",
@@ -369,6 +390,28 @@ export async function seedDatabase() {
     title: "Local design corner",
     description: "Lay out local design and architecture books for guests who appreciate them.",
     categoryTags: ["design"],
+    suitableFor: ["quiet"],
+    hostEffort: "low",
+    costLevel: "low",
+  });
+  // Distinct craftsmanship knowledge on EACH property — proves feasibility uses
+  // the brief's own property and never the other property's private knowledge.
+  await db.insert(propertyCapabilities).values({
+    tenantId,
+    propertyId: property.id,
+    title: "Atlantic craft note",
+    description: "A short handwritten note about an Atlantic Hideaway craftsperson.",
+    categoryTags: ["craftsmanship"],
+    suitableFor: ["quiet"],
+    hostEffort: "low",
+    costLevel: "none",
+  });
+  await db.insert(propertyCapabilities).values({
+    tenantId,
+    propertyId: pineRidge.id,
+    title: "Pine Ridge woodcraft session",
+    description: "A short woodcraft demonstration unique to Pine Ridge Cabins.",
+    categoryTags: ["craftsmanship"],
     suitableFor: ["quiet"],
     hostEffort: "low",
     costLevel: "low",

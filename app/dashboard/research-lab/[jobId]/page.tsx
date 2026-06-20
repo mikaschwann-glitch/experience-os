@@ -2,13 +2,15 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/devAuth";
 import { getJobDetail } from "@/lib/repositories/research";
-import { getLatestRunForBrief } from "@/lib/repositories/feasibility";
+import { getBriefAuthoritativeProperty, getLatestRunForBrief } from "@/lib/repositories/feasibility";
+import { listTenantProperties } from "@/lib/repositories/propertyIntelligence";
 import {
   Card,
   C,
   Field,
   Icon,
   SectionTitle,
+  Select,
   SubmitButton,
   TextInput,
 } from "../../_components/ui";
@@ -62,6 +64,10 @@ export default async function JobDetailPage({ params }: { params: Promise<{ jobI
   const { job, guest, sources, candidates, evidence, brief, briefItems, incidents, timeline } = detail;
   // Latest feasibility run for this brief (so the host can jump back to a result).
   const latestRun = brief && brief.status === "approved" ? await getLatestRunForBrief(tenantId, brief.id) : null;
+  // Authoritative property (from the brief's stay) is locked; otherwise the host
+  // must choose from this tenant's properties before evaluating.
+  const authProperty = brief && brief.status === "approved" ? await getBriefAuthoritativeProperty(tenantId, brief.id) : null;
+  const selectableProperties = brief && brief.status === "approved" && !authProperty ? await listTenantProperties(tenantId) : [];
   const draft = brief && brief.status === "draft";
 
   return (
@@ -261,21 +267,47 @@ export default async function JobDetailPage({ params }: { params: Promise<{ jobI
                 ) : null}
 
                 {brief.status === "approved" ? (
-                  <div className="mt-3 flex flex-wrap items-center gap-3 pt-3" style={{ borderTop: `1px solid ${C.soft}` }}>
-                    <form action={evaluateFeasibilityAction.bind(null, brief.id)}>
-                      <SubmitButton type="submit" data-testid="evaluate-feasibility">
-                        <Icon name="arrowRight" size={15} /> Evaluate feasible preparations
-                      </SubmitButton>
-                    </form>
-                    {latestRun ? (
-                      <Link
-                        href={`/dashboard/feasibility/${latestRun.id}`}
-                        className="text-[12.5px] font-medium no-underline"
-                        style={{ color: C.clay }}
-                      >
-                        View latest result →
-                      </Link>
-                    ) : null}
+                  <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${C.soft}` }}>
+                    {authProperty ? (
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className="text-[12.5px]" style={{ color: C.muted }} data-testid="eval-property">
+                          Property for evaluation:{" "}
+                          <span style={{ color: C.ink, fontWeight: 500 }}>{authProperty.name}</span>
+                        </span>
+                        <form action={evaluateFeasibilityAction.bind(null, brief.id)}>
+                          <SubmitButton type="submit" data-testid="evaluate-feasibility">
+                            <Icon name="arrowRight" size={15} /> Evaluate feasible preparations
+                          </SubmitButton>
+                        </form>
+                        {latestRun ? (
+                          <Link
+                            href={`/dashboard/feasibility/${latestRun.id}`}
+                            className="text-[12.5px] font-medium no-underline"
+                            style={{ color: C.clay }}
+                          >
+                            View latest result →
+                          </Link>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <form action={evaluateFeasibilityAction.bind(null, brief.id)} className="flex flex-wrap items-end gap-2">
+                        <Field label="Property to evaluate against">
+                          <Select name="propertyId" defaultValue="" required style={{ width: 240 }}>
+                            <option value="" disabled>
+                              Choose a property…
+                            </option>
+                            {selectableProperties.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name}
+                              </option>
+                            ))}
+                          </Select>
+                        </Field>
+                        <SubmitButton type="submit" data-testid="evaluate-feasibility">
+                          <Icon name="arrowRight" size={15} /> Evaluate feasible preparations
+                        </SubmitButton>
+                      </form>
+                    )}
                   </div>
                 ) : null}
               </Card>

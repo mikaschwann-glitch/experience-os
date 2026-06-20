@@ -5,8 +5,10 @@ import {
   feasibilityProposals,
   feasibilityRuns,
   guests,
+  prearrivalBriefs,
   properties,
   recommendations,
+  stays,
 } from "@/db/schema";
 import { emitEvent } from "@/lib/events/events";
 import { createHostAction } from "@/lib/repositories/slice";
@@ -39,6 +41,32 @@ export async function getFeasibilityRun(tenantId: string, runId: string) {
     actionable: proposals.filter((p) => p.status !== "withheld"),
     withheld: proposals.filter((p) => p.status === "withheld"),
   };
+}
+
+/**
+ * The brief's authoritative property (via its stay), or null if the brief has no
+ * assigned property. Feasibility must evaluate against THIS property.
+ */
+export async function getBriefAuthoritativeProperty(tenantId: string, briefId: string) {
+  const db = getDb();
+  const [brief] = await db
+    .select({ stayId: prearrivalBriefs.stayId })
+    .from(prearrivalBriefs)
+    .where(and(eq(prearrivalBriefs.tenantId, tenantId), eq(prearrivalBriefs.id, briefId)))
+    .limit(1);
+  if (!brief?.stayId) return null;
+  const [stay] = await db
+    .select({ propertyId: stays.propertyId })
+    .from(stays)
+    .where(and(eq(stays.tenantId, tenantId), eq(stays.id, brief.stayId)))
+    .limit(1);
+  if (!stay?.propertyId) return null;
+  const [p] = await db
+    .select({ id: properties.id, name: properties.name })
+    .from(properties)
+    .where(and(eq(properties.tenantId, tenantId), eq(properties.id, stay.propertyId)))
+    .limit(1);
+  return p ?? null;
 }
 
 /** Latest run for a brief (so the brief page can link straight to a result). */
