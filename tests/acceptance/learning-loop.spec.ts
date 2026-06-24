@@ -21,9 +21,8 @@ test.describe("Outcome → Property Learning Loop acceptance", () => {
     await page.getByRole("button", { name: "Approve" }).click();
     await page.getByTestId("evaluate-feasibility").click();
     await expect(page).toHaveURL(FEAS_URL);
-    await page.getByRole("button", { name: "Accept" }).first().click();
-    await page.getByRole("button", { name: "Convert to host action" }).first().click();
-    await expect(page.getByText("Converted into a host action").first()).toBeVisible();
+    await page.getByRole("button", { name: /Confirm/ }).first().click();
+    await expect(page.getByText(/Added to the host/).first()).toBeVisible();
 
     // 3. Open Greta's guest page and log the outcome on the converted host action.
     await page.goto("/dashboard/guests");

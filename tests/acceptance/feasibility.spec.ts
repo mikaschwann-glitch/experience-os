@@ -19,15 +19,12 @@ test.describe("Feasibility engine acceptance", () => {
     await expect(page).toHaveURL(FEAS_URL);
 
     await expect(page.getByText("Proposed preparations")).toBeVisible();
-    const accept = page.getByRole("button", { name: "Accept" }).first();
-    await expect(accept).toBeVisible();
-    await accept.click();
-
-    // accepted → recommendation created → convert into a host action
-    const convert = page.getByRole("button", { name: "Convert to host action" }).first();
-    await expect(convert).toBeVisible();
-    await convert.click();
-    await expect(page.getByText("Converted into a host action").first()).toBeVisible();
+    // One-step confirm (replaces the old Accept → Convert two-step): exactly one
+    // recommendation + one host action, idempotent.
+    const confirm = page.getByRole("button", { name: /Confirm/ }).first();
+    await expect(confirm).toBeVisible();
+    await confirm.click();
+    await expect(page.getByText(/Added to the host/).first()).toBeVisible();
   });
 
   test("Aiko: medium identity → no brief → no feasibility evaluation available", async ({ page }) => {

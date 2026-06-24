@@ -100,6 +100,7 @@ export async function getGuestMemory(tenantId: string, guestId: string) {
     db
       .select({
         id: stays.id,
+        propertyId: stays.propertyId,
         unitName: units.name,
         startDate: stays.startDate,
         endDate: stays.endDate,

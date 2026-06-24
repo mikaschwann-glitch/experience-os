@@ -1,14 +1,18 @@
 /**
  * Wave 2C — Capability-First Feasibility Engine (deterministic, SIMULATION).
  *
- * Given an APPROVED, high-confidence pre-arrival brief + this property's active
- * private knowledge + simulated stay context, it produces 0–3 concrete host
- * preparations — or deliberately withholds. "withhold rather than guess": a
- * clean "no safe recommendation" is a success.
+ * Produces 0–3 concrete host preparations from a property's active private
+ * knowledge + simulated stay context — or deliberately withholds ("withhold
+ * rather than guess"). Matching uses ONLY the shared canonical vocabulary.
  *
- * Matching uses ONLY the shared canonical vocabulary. Blocked/sensitive evidence
- * never reaches here (the engine reads only allowed, brief-included evidence).
- * No LLM, no live data.
+ * Wave 2D.1 — the matcher is now SOURCE-AGNOSTIC. `runFeasibilityCore` holds all
+ * matching / constraints / withholding / ranking / persistence. Two thin adapters
+ * feed it:
+ *   - `evaluateFeasibility(briefId)` — the approved, high-confidence research brief
+ *     path (externally researched). Blocked/sensitive evidence never reaches here.
+ *   - `evaluateFirstPartyFeasibility({ stayId, topics, ... })` — a first-party host
+ *     note / guest request (NOT externally researched, no consent gate, no brief).
+ * Neither duplicates matching, constraint, or withholding logic.
  */
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db/client";
@@ -27,10 +31,12 @@ import {
   stays,
 } from "@/db/schema";
 import { emitEvent } from "@/lib/events/events";
-import { overlap, tagLabel } from "@/lib/domain/vocabulary";
+import { overlap, sanitizeTags, tagLabel } from "@/lib/domain/vocabulary";
 import { resolveSimContext, type SimContext } from "@/lib/feasibility/context";
 
 const MAX_ACTIONABLE = 3;
+
+export type TriggerSource = "guest_stated" | "host_noted" | "system_profile_match";
 
 type ProposalStatus =
   | "proposed"
@@ -69,6 +75,15 @@ export interface EvaluateResult {
   refusedReason?: string;
   actionable: number;
   withheld: number;
+}
+
+// Explicit provenance for a run — set by each adapter, NEVER inferred from brief_id.
+interface RunOrigin {
+  briefId: string | null;
+  jobId: string | null;
+  triggerSource: TriggerSource | null;
+  externallyResearched: boolean;
+  sourceSignalId: string | null;
 }
 
 function evaluateConstraints(
@@ -128,108 +143,25 @@ function rationale(matched: string[], insightTitle: string | null, capabilityTit
   return parts.join(" ");
 }
 
-export async function evaluateFeasibility(
-  tenantId: string,
-  userId: string,
-  briefId: string,
-  requestedPropertyId?: string,
-  override?: Partial<SimContext>,
-): Promise<EvaluateResult> {
+/**
+ * Source-agnostic feasibility core. Given a property's active knowledge + the
+ * guest's topics + simulated context, it builds 0–3 actionable proposals (plus
+ * withheld) and persists a completed run + proposals + evidence + event. ALL
+ * matching/constraint/withholding lives here so no adapter duplicates it.
+ */
+async function runFeasibilityCore(input: {
+  tenantId: string;
+  userId: string;
+  propertyId: string;
+  guestId: string;
+  stayId: string | null;
+  guestTopics: string[];
+  evidenceIdByCategory: Map<string, string>;
+  ctx: SimContext;
+  origin: RunOrigin;
+}): Promise<EvaluateResult> {
+  const { tenantId, userId, propertyId, guestId, stayId, guestTopics, evidenceIdByCategory, ctx, origin } = input;
   const db = getDb();
-
-  const [brief] = await db
-    .select()
-    .from(prearrivalBriefs)
-    .where(and(eq(prearrivalBriefs.tenantId, tenantId), eq(prearrivalBriefs.id, briefId)))
-    .limit(1);
-  if (!brief) throw new Error("Brief not found for this tenant.");
-
-  // Authoritative property = the property of the brief's stay (if any). The brief
-  // is ALWAYS evaluated against that property's knowledge — never the wrong one.
-  let authoritativePropertyId: string | null = null;
-  if (brief.stayId) {
-    const [stay] = await db
-      .select({ propertyId: stays.propertyId })
-      .from(stays)
-      .where(and(eq(stays.tenantId, tenantId), eq(stays.id, brief.stayId)))
-      .limit(1);
-    authoritativePropertyId = stay?.propertyId ?? null;
-  }
-
-  // Resolve the effective property + guard (defense in depth; never trust the UI).
-  let propertyId: string;
-  if (authoritativePropertyId) {
-    if (requestedPropertyId && requestedPropertyId !== authoritativePropertyId) {
-      throw new Error("Property does not match the brief's stay — refusing inconsistent property.");
-    }
-    propertyId = authoritativePropertyId;
-  } else {
-    if (!requestedPropertyId) {
-      throw new Error("This brief has no assigned property; a property must be selected.");
-    }
-    propertyId = requestedPropertyId;
-  }
-
-  // Never trust a client property id: verify it belongs to this tenant.
-  const [prop] = await db
-    .select({ id: properties.id })
-    .from(properties)
-    .where(and(eq(properties.tenantId, tenantId), eq(properties.id, propertyId)))
-    .limit(1);
-  if (!prop) throw new Error("Property not found for this tenant.");
-
-  const [guest] = await db
-    .select()
-    .from(guests)
-    .where(and(eq(guests.tenantId, tenantId), eq(guests.id, brief.guestId)))
-    .limit(1);
-
-  const stayId: string | null = brief.stayId ?? null;
-  const ctx = resolveSimContext(guest?.fullName ?? "", override);
-
-  // ---- Preconditions: refuse (record an auditable run) rather than guess ----
-  async function refuse(reason: string): Promise<EvaluateResult> {
-    const runId = await db.transaction(async (tx) => {
-      const [run] = await tx
-        .insert(feasibilityRuns)
-        .values({
-          tenantId,
-          propertyId: propertyId,
-          guestId: brief.guestId,
-          briefId: brief.id,
-          jobId: brief.jobId,
-          stayId,
-          status: "refused",
-          refusedReason: reason,
-          simContext: ctx,
-          triggeredByUserId: userId,
-        })
-        .returning();
-      await emitEvent(tx, {
-        tenantId,
-        actorUserId: userId,
-        type: "feasibility.refused",
-        entityType: "feasibility_run",
-        entityId: run.id,
-        payload: { reason },
-      });
-      return run.id;
-    });
-    return { runId, status: "refused", refusedReason: reason, actionable: 0, withheld: 0 };
-  }
-
-  if (brief.status !== "approved") return refuse("brief_not_approved");
-  if (brief.confidence !== "high") return refuse("low_confidence");
-
-  // ---- Guest topics: ONLY allowed, brief-included evidence (no sensitive leakage) ----
-  const evid = await db
-    .select()
-    .from(evidenceItems)
-    .where(and(eq(evidenceItems.tenantId, tenantId), eq(evidenceItems.jobId, brief.jobId)));
-  const allowedEvid = evid.filter((e) => e.classification === "allowed" && e.includedInBrief);
-  const guestTopics = Array.from(new Set(allowedEvid.map((e) => e.category)));
-  const evidenceIdByCategory = new Map<string, string>();
-  for (const e of allowedEvid) if (!evidenceIdByCategory.has(e.category)) evidenceIdByCategory.set(e.category, e.id);
 
   // ---- Active property knowledge ----
   const [caps, insights, playbooks, constraints] = await Promise.all([
@@ -347,11 +279,14 @@ export async function evaluateFeasibility(
       .insert(feasibilityRuns)
       .values({
         tenantId,
-        propertyId: propertyId,
-        guestId: brief.guestId,
-        briefId: brief.id,
-        jobId: brief.jobId,
+        propertyId,
+        guestId,
+        briefId: origin.briefId,
+        jobId: origin.jobId,
         stayId,
+        triggerSource: origin.triggerSource,
+        externallyResearched: origin.externallyResearched,
+        sourceSignalId: origin.sourceSignalId,
         status: "completed",
         simContext: ctx,
         proposalCount: kept.length,
@@ -366,8 +301,8 @@ export async function evaluateFeasibility(
         .values({
           tenantId,
           runId: run.id,
-          propertyId: propertyId,
-          guestId: brief.guestId,
+          propertyId,
+          guestId,
           title: d.title,
           description: d.description,
           rationale: d.rationale,
@@ -388,6 +323,7 @@ export async function evaluateFeasibility(
         })
         .returning();
       // Provenance: link the guest evidence (by matched category) that justified it.
+      // First-party runs have no evidence items → evidenceItemId stays null.
       for (const cat of d.matchedTags) {
         const evId = evidenceIdByCategory.get(cat);
         await tx.insert(feasibilityProposalEvidence).values({
@@ -405,10 +341,211 @@ export async function evaluateFeasibility(
       type: "feasibility.evaluated",
       entityType: "feasibility_run",
       entityId: run.id,
-      payload: { actionable: actionable.length, withheld: withheld.length, propertyId: propertyId },
+      payload: { actionable: actionable.length, withheld: withheld.length, propertyId },
     });
     return run.id;
   });
 
   return { runId, status: "completed", actionable: actionable.length, withheld: withheld.length };
+}
+
+/**
+ * Brief adapter (externally researched). Requires an APPROVED, high-confidence
+ * pre-arrival brief; derives guest topics from ONLY allowed, brief-included
+ * evidence; never reads blocked/sensitive content.
+ */
+export async function evaluateFeasibility(
+  tenantId: string,
+  userId: string,
+  briefId: string,
+  requestedPropertyId?: string,
+  override?: Partial<SimContext>,
+): Promise<EvaluateResult> {
+  const db = getDb();
+
+  const [brief] = await db
+    .select()
+    .from(prearrivalBriefs)
+    .where(and(eq(prearrivalBriefs.tenantId, tenantId), eq(prearrivalBriefs.id, briefId)))
+    .limit(1);
+  if (!brief) throw new Error("Brief not found for this tenant.");
+
+  // Authoritative property = the property of the brief's stay (if any). The brief
+  // is ALWAYS evaluated against that property's knowledge — never the wrong one.
+  let authoritativePropertyId: string | null = null;
+  if (brief.stayId) {
+    const [stay] = await db
+      .select({ propertyId: stays.propertyId })
+      .from(stays)
+      .where(and(eq(stays.tenantId, tenantId), eq(stays.id, brief.stayId)))
+      .limit(1);
+    authoritativePropertyId = stay?.propertyId ?? null;
+  }
+
+  // Resolve the effective property + guard (defense in depth; never trust the UI).
+  let propertyId: string;
+  if (authoritativePropertyId) {
+    if (requestedPropertyId && requestedPropertyId !== authoritativePropertyId) {
+      throw new Error("Property does not match the brief's stay — refusing inconsistent property.");
+    }
+    propertyId = authoritativePropertyId;
+  } else {
+    if (!requestedPropertyId) {
+      throw new Error("This brief has no assigned property; a property must be selected.");
+    }
+    propertyId = requestedPropertyId;
+  }
+
+  // Never trust a client property id: verify it belongs to this tenant.
+  const [prop] = await db
+    .select({ id: properties.id })
+    .from(properties)
+    .where(and(eq(properties.tenantId, tenantId), eq(properties.id, propertyId)))
+    .limit(1);
+  if (!prop) throw new Error("Property not found for this tenant.");
+
+  const [guest] = await db
+    .select()
+    .from(guests)
+    .where(and(eq(guests.tenantId, tenantId), eq(guests.id, brief.guestId)))
+    .limit(1);
+
+  const stayId: string | null = brief.stayId ?? null;
+  const ctx = resolveSimContext(guest?.fullName ?? "", override);
+
+  // ---- Preconditions: refuse (record an auditable, externally-researched run) ----
+  async function refuse(reason: string): Promise<EvaluateResult> {
+    const runId = await db.transaction(async (tx) => {
+      const [run] = await tx
+        .insert(feasibilityRuns)
+        .values({
+          tenantId,
+          propertyId,
+          guestId: brief.guestId,
+          briefId: brief.id,
+          jobId: brief.jobId,
+          stayId,
+          triggerSource: null,
+          externallyResearched: true,
+          sourceSignalId: null,
+          status: "refused",
+          refusedReason: reason,
+          simContext: ctx,
+          triggeredByUserId: userId,
+        })
+        .returning();
+      await emitEvent(tx, {
+        tenantId,
+        actorUserId: userId,
+        type: "feasibility.refused",
+        entityType: "feasibility_run",
+        entityId: run.id,
+        payload: { reason },
+      });
+      return run.id;
+    });
+    return { runId, status: "refused", refusedReason: reason, actionable: 0, withheld: 0 };
+  }
+
+  if (brief.status !== "approved") return refuse("brief_not_approved");
+  if (brief.confidence !== "high") return refuse("low_confidence");
+
+  // ---- Guest topics: ONLY allowed, brief-included evidence (no sensitive leakage) ----
+  const evid = await db
+    .select()
+    .from(evidenceItems)
+    .where(and(eq(evidenceItems.tenantId, tenantId), eq(evidenceItems.jobId, brief.jobId)));
+  const allowedEvid = evid.filter((e) => e.classification === "allowed" && e.includedInBrief);
+  const guestTopics = Array.from(new Set(allowedEvid.map((e) => e.category)));
+  const evidenceIdByCategory = new Map<string, string>();
+  for (const e of allowedEvid) if (!evidenceIdByCategory.has(e.category)) evidenceIdByCategory.set(e.category, e.id);
+
+  return runFeasibilityCore({
+    tenantId,
+    userId,
+    propertyId,
+    guestId: brief.guestId,
+    stayId,
+    guestTopics,
+    evidenceIdByCategory,
+    ctx,
+    origin: {
+      briefId: brief.id,
+      jobId: brief.jobId,
+      triggerSource: null,
+      externallyResearched: true,
+      sourceSignalId: null,
+    },
+  });
+}
+
+/**
+ * First-party adapter (NOT externally researched, no brief, no consent gate).
+ * The trigger is a host note / guest request within a specific stay. Topics are
+ * host-selected canonical tags (deterministic; no free-text classification, no
+ * LLM). Property/guest are resolved server-side from the stay; cross-tenant and
+ * guest/stay/property mismatches are rejected.
+ */
+export async function evaluateFirstPartyFeasibility(
+  tenantId: string,
+  userId: string,
+  input: {
+    stayId: string;
+    topics: string[];
+    triggerSource: TriggerSource;
+    sourceSignalId: string | null;
+    guestId?: string; // optional cross-check
+    override?: Partial<SimContext>;
+  },
+): Promise<EvaluateResult> {
+  const db = getDb();
+
+  const [stay] = await db
+    .select({ id: stays.id, guestId: stays.guestId, propertyId: stays.propertyId })
+    .from(stays)
+    .where(and(eq(stays.tenantId, tenantId), eq(stays.id, input.stayId)))
+    .limit(1);
+  if (!stay) throw new Error("Stay not found for this tenant.");
+  if (input.guestId && stay.guestId !== input.guestId) {
+    throw new Error("Stay does not belong to this guest — refusing mismatched guest/stay.");
+  }
+  if (!stay.propertyId) {
+    throw new Error("This stay has no assigned property; a preparation cannot be scoped.");
+  }
+
+  // Never trust a client property id: the property is the stay's, verified in tenant.
+  const [prop] = await db
+    .select({ id: properties.id })
+    .from(properties)
+    .where(and(eq(properties.tenantId, tenantId), eq(properties.id, stay.propertyId)))
+    .limit(1);
+  if (!prop) throw new Error("Property not found for this tenant.");
+
+  const [guest] = await db
+    .select({ fullName: guests.fullName })
+    .from(guests)
+    .where(and(eq(guests.tenantId, tenantId), eq(guests.id, stay.guestId)))
+    .limit(1);
+
+  // Deterministic: keep only canonical tags from the host's selection.
+  const guestTopics = sanitizeTags(input.topics);
+  const ctx = resolveSimContext(guest?.fullName ?? "", input.override);
+
+  return runFeasibilityCore({
+    tenantId,
+    userId,
+    propertyId: stay.propertyId,
+    guestId: stay.guestId,
+    stayId: stay.id,
+    guestTopics,
+    evidenceIdByCategory: new Map(),
+    ctx,
+    origin: {
+      briefId: null,
+      jobId: null,
+      triggerSource: input.triggerSource,
+      externallyResearched: false,
+      sourceSignalId: input.sourceSignalId,
+    },
+  });
 }

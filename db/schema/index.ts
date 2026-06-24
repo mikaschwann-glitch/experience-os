@@ -27,6 +27,10 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+// Shared provenance enum lives in a leaf module (no intra-schema imports) so it is
+// initialized before the recommendations + feasibility_runs tables that use it.
+import { triggerSourceEnum } from "./enums";
+export * from "./enums";
 
 // ---- Enums ----
 
@@ -276,6 +280,11 @@ export const recommendations = pgTable(
     effort: text("effort"), // 'low' | 'medium' | 'high' (free text in Run 1)
     status: recommendationStatusEnum("status").notNull().default("pending"),
     generatedBy: generatedByEnum("generated_by").notNull().default("manual"),
+    // Provenance (explicit, never inferred from a FK). trigger_source = the human/
+    // profile origin; externally_researched = whether the inputs came from an
+    // external research path (the only class that needs a consent gate).
+    triggerSource: triggerSourceEnum("trigger_source"),
+    externallyResearched: boolean("externally_researched").notNull().default(false),
     scheduledFor: timestamp("scheduled_for", { withTimezone: true }),
     correlationId: uuid("correlation_id").notNull(),
     ...timestamps,

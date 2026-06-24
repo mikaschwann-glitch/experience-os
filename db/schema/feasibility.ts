@@ -19,6 +19,7 @@ import {
   properties,
   guests,
   stays,
+  signals,
   users,
   prearrivalBriefs,
   localInsights,
@@ -29,6 +30,7 @@ import {
   piEffortEnum,
   piCostEnum,
 } from "./index";
+import { triggerSourceEnum } from "./enums";
 
 export const feasibilityRunStatusEnum = pgEnum("feasibility_run_status", [
   "completed",
@@ -63,11 +65,22 @@ export const feasibilityRuns = pgTable(
     guestId: uuid("guest_id")
       .notNull()
       .references(() => guests.id, { onDelete: "cascade" }),
-    briefId: uuid("brief_id")
-      .notNull()
-      .references(() => prearrivalBriefs.id, { onDelete: "cascade" }),
+    // Nullable: a first-party (host-note / guest-request) run has no brief.
+    briefId: uuid("brief_id").references(() => prearrivalBriefs.id, {
+      onDelete: "cascade",
+    }),
     jobId: uuid("job_id"),
     stayId: uuid("stay_id").references(() => stays.id, { onDelete: "set null" }),
+    // Wave 2D.1 — first-party reactive provenance + traceability. Set explicitly
+    // by each adapter; never inferred from brief_id. For research/brief runs:
+    // externally_researched=true, trigger_source=null, source_signal_id=null.
+    triggerSource: triggerSourceEnum("trigger_source"),
+    externallyResearched: boolean("externally_researched").notNull().default(false),
+    // Causal link back to the originating first-party signal (host note / guest
+    // request). Null for research and future profile-match runs.
+    sourceSignalId: uuid("source_signal_id").references(() => signals.id, {
+      onDelete: "set null",
+    }),
     status: feasibilityRunStatusEnum("status").notNull().default("completed"),
     refusedReason: text("refused_reason"),
     // Simulated, clearly-labelled context (no live sources). e.g. { weather, transport }.

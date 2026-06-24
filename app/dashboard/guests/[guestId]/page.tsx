@@ -30,6 +30,7 @@ import {
   dismissRecommendationAction,
   logOutcomeAction,
   captureLearningAction,
+  planPreparationAction,
 } from "./actions";
 
 const LEARNING_TYPE_LABEL: Record<string, string> = {
@@ -105,6 +106,13 @@ export default async function GuestMemoryPage({
   );
   const primaryStay = stays[0] ?? null;
   const contact = [guest.email, guest.language, guest.country].filter(Boolean).join(" · ");
+  // Reactive first-party slice: a preparation must be scoped to a stay with a property.
+  const eligibleStays = stays.filter((s) => s.propertyId);
+  // De-dup: an accepted recommendation that already has a host action must not offer
+  // "Plan host action" again.
+  const actionedRecIds = new Set(
+    hostActions.map((h) => h.recommendationId).filter((id): id is string => !!id),
+  );
 
   return (
     <div>
@@ -145,6 +153,65 @@ export default async function GuestMemoryPage({
       <div className="mt-7 grid grid-cols-1 gap-7 lg:grid-cols-[1fr_330px]">
         {/* ---- Left: the manual chain (the core product workflow) ---- */}
         <div className="space-y-7">
+          {/* Plan a preparation (reactive first-party slice) */}
+          {eligibleStays.length > 0 ? (
+            <section>
+              <SectionTitle>Plan a preparation</SectionTitle>
+              <Card className="mt-3 p-4">
+                <p className="text-[12.5px] leading-relaxed" style={{ color: C.muted }}>
+                  A guest asked for something, or you noticed something for their stay? Pick the
+                  stay and the topics — you’ll see only what this property can safely prepare.
+                </p>
+                <form
+                  action={planPreparationAction.bind(null, guest.id)}
+                  className="mt-3 space-y-3"
+                >
+                  <Field label="For which stay?">
+                    <Select name="stayId" defaultValue={eligibleStays[0].id} required>
+                      {eligibleStays.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {(s.unitName ?? "Unit")} · {s.startDate} – {s.endDate}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field label="What did they ask for, or what did you notice?">
+                    <TextArea
+                      name="note"
+                      rows={2}
+                      placeholder="e.g. “They’d like a quiet hike.” (stored as your note; not analysed)"
+                    />
+                  </Field>
+                  <div>
+                    <div className="mb-1 text-[12px] font-medium" style={{ color: C.muted }}>
+                      Topics
+                    </div>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                      {TOPIC_CATEGORIES.map((t) => (
+                        <label
+                          key={t}
+                          className="flex items-center gap-1.5 text-[12.5px]"
+                          style={{ color: C.ink }}
+                        >
+                          <input type="checkbox" name="topics" value={t} /> {tagLabel(t)}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Select name="triggerSource" defaultValue="guest_stated" style={{ width: 190 }}>
+                      <option value="guest_stated">The guest asked</option>
+                      <option value="host_noted">I noticed it</option>
+                    </Select>
+                    <SubmitButton type="submit">
+                      <Icon name="arrowRight" size={15} /> See what we can prepare
+                    </SubmitButton>
+                  </div>
+                </form>
+              </Card>
+            </section>
+          ) : null}
+
           {/* Capture a signal */}
           <section>
             <SectionTitle>Capture a signal</SectionTitle>
@@ -290,18 +357,27 @@ export default async function GuestMemoryPage({
                     ) : null}
 
                     {r.status === "accepted" ? (
-                      <form
-                        action={createHostActionAction.bind(null, r.id, guest.id)}
-                        className="mt-3 flex flex-wrap items-end gap-2 pt-3"
-                        style={{ borderTop: `1px solid ${C.soft}` }}
-                      >
-                        <div className="min-w-[220px] flex-1">
-                          <TextInput name="title" required placeholder="Host action to prepare…" />
-                        </div>
-                        <SubmitButton type="submit" variant="ghost">
-                          Plan host action
-                        </SubmitButton>
-                      </form>
+                      actionedRecIds.has(r.id) ? (
+                        <p
+                          className="mt-3 flex items-center gap-1.5 pt-3 text-[12.5px]"
+                          style={{ borderTop: `1px solid ${C.soft}`, color: C.muted }}
+                        >
+                          <Icon name="check" size={13} /> Added to host actions.
+                        </p>
+                      ) : (
+                        <form
+                          action={createHostActionAction.bind(null, r.id, guest.id)}
+                          className="mt-3 flex flex-wrap items-end gap-2 pt-3"
+                          style={{ borderTop: `1px solid ${C.soft}` }}
+                        >
+                          <div className="min-w-[220px] flex-1">
+                            <TextInput name="title" required placeholder="Host action to prepare…" />
+                          </div>
+                          <SubmitButton type="submit" variant="ghost">
+                            Plan host action
+                          </SubmitButton>
+                        </form>
+                      )
                     ) : null}
                   </Card>
                 ))

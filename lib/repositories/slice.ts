@@ -107,6 +107,12 @@ export async function createRecommendationFromInsight(
     description?: string | null;
     rationale?: string | null;
     effort?: string | null;
+    // Optional stay scope + provenance (used by the reactive first-party fallback).
+    // Defaults preserve the generic manual path (stayId null, status pending,
+    // trigger_source null, externally_researched false).
+    stayId?: string | null;
+    status?: "pending" | "accepted";
+    triggerSource?: "guest_stated" | "host_noted" | "system_profile_match" | null;
   },
 ) {
   const db = getDb();
@@ -123,12 +129,16 @@ export async function createRecommendationFromInsight(
       .values({
         tenantId,
         guestId: insight.guestId,
+        stayId: input.stayId ?? null,
         title: input.title,
         description: input.description ?? null,
         rationale: input.rationale ?? null,
         effort: input.effort ?? "low",
-        status: "pending",
+        status: input.status ?? "pending",
         generatedBy: "manual",
+        // First-party host-authored fallback is never externally researched.
+        triggerSource: input.triggerSource ?? null,
+        externallyResearched: false,
         correlationId: insight.correlationId,
       })
       .returning();

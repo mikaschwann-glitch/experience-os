@@ -1,6 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { and, eq } from "drizzle-orm";
+import { getDb } from "@/db/client";
+import { stays } from "@/db/schema";
 import { getAuthContext } from "@/lib/auth/devAuth";
 import {
   createHostAction,
@@ -10,6 +14,7 @@ import {
   logOutcome,
   setRecommendationStatus,
 } from "@/lib/repositories/slice";
+import { evaluateFirstPartyFeasibility } from "@/lib/feasibility/engine";
 import { captureLearning, type LearningType } from "@/lib/repositories/learning";
 
 /**
@@ -128,4 +133,48 @@ export async function captureLearningAction(
   await captureLearning(tenantId, userId, outcomeId, { learningType, note, tags });
   revalidateGuest(guestId);
   revalidatePath("/dashboard/property-intelligence");
+}
+
+/**
+ * Wave 2D.1 — Reactive first-party slice. A host note / guest request within a
+ * SPECIFIC stay → existing capability/constraint/withholding engine → feasibility
+ * run. Tenant/guest/stay/property are resolved + checked server-side; the free-text
+ * note is stored as the source signal (never classified, never sent to an LLM).
+ * Topics are host-selected canonical tags only. No external research, no consent gate.
+ */
+export async function planPreparationAction(guestId: string, formData: FormData) {
+  const { tenantId, userId } = await getAuthContext();
+  const stayId = String(formData.get("stayId") ?? "").trim();
+  if (!stayId) return;
+  const topics = formData.getAll("topics").map(String);
+  const triggerSource =
+    String(formData.get("triggerSource") ?? "host_noted") === "guest_stated"
+      ? "guest_stated"
+      : "host_noted";
+  const note = String(formData.get("note") ?? "").trim();
+
+  // Reject cross-tenant / mismatched guest·stay·property before recording anything.
+  const db = getDb();
+  const [stay] = await db
+    .select({ id: stays.id, guestId: stays.guestId, propertyId: stays.propertyId })
+    .from(stays)
+    .where(and(eq(stays.tenantId, tenantId), eq(stays.id, stayId)))
+    .limit(1);
+  if (!stay || stay.guestId !== guestId || !stay.propertyId) return;
+
+  // Store the host note / guest request as the source signal (first-party, unparsed).
+  let sourceSignalId: string | null = null;
+  if (note) {
+    const sig = await createSignal(tenantId, userId, { guestId, stayId, body: note });
+    sourceSignalId = sig.id;
+  }
+
+  const result = await evaluateFirstPartyFeasibility(tenantId, userId, {
+    stayId,
+    topics,
+    triggerSource,
+    sourceSignalId,
+    guestId,
+  });
+  redirect(`/dashboard/feasibility/${result.runId}`);
 }

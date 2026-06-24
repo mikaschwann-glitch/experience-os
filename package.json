@@ -14,6 +14,8 @@
     "verify:pi": "tsx scripts/verify-property-intelligence.ts",
     "verify:feasibility": "tsx scripts/verify-feasibility.ts",
     "verify:learning-loop": "tsx scripts/verify-learning-loop.ts",
+    "verify:reactive": "tsx scripts/verify-reactive-slice.ts",
+    "verify:migration-backfill": "tsx scripts/verify-migration-backfill.ts",
     "test:integration": "tsx tests/integration/run1-isolation.ts",
     "test:acceptance": "npm run build && playwright test"
   },
