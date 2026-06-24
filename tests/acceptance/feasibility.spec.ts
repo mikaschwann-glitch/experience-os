@@ -5,6 +5,8 @@ import { test, expect } from "@playwright/test";
 
 const JOB_URL = /\/dashboard\/research-lab\/[0-9a-f-]{36}/;
 const FEAS_URL = /\/dashboard\/feasibility\/[0-9a-f-]{36}/;
+const PREP_URL = /\/dashboard\/preparations\/[0-9a-f-]{36}/;
+const GUEST_URL = /\/dashboard\/guests\/[0-9a-f-]{36}/;
 
 test.describe("Feasibility engine acceptance", () => {
   test("Greta: approve → evaluate → accept → convert to host action", async ({ page }) => {
@@ -19,12 +21,15 @@ test.describe("Feasibility engine acceptance", () => {
     await expect(page).toHaveURL(FEAS_URL);
 
     await expect(page.getByText("Proposed preparations")).toBeVisible();
-    // One-step confirm (replaces the old Accept → Convert two-step): exactly one
-    // recommendation + one host action, idempotent.
-    const confirm = page.getByRole("button", { name: /Confirm/ }).first();
-    await expect(confirm).toBeVisible();
-    await confirm.click();
-    await expect(page.getByText(/Added to the host/).first()).toBeVisible();
+    // One-step "Create preparation": creates exactly one Preparation and navigates
+    // straight to its detail surface (no silent disappearance).
+    const create = page.getByRole("button", { name: /Create preparation/ }).first();
+    await expect(create).toBeVisible();
+    await create.click();
+    await expect(page).toHaveURL(PREP_URL);
+    // Recoverable from the durable Preparations inventory.
+    await page.goto("/dashboard/preparations");
+    await expect(page.getByRole("heading", { name: "Preparations" })).toBeVisible();
   });
 
   test("Aiko: medium identity → no brief → no feasibility evaluation available", async ({ page }) => {
@@ -60,5 +65,35 @@ test.describe("Feasibility engine acceptance", () => {
     // the crater (car-dependent) candidate appears only under "Not proposed"
     await expect(page.getByText("Not proposed — and why")).toBeVisible();
     await expect(page.getByText("Blocked by a house rule").first()).toBeVisible();
+  });
+
+  test("Fallback idempotency: editing the content yields a NEW preparation, not a conflict", async ({ page }) => {
+    // Reach a WITHHOLDING run via the guest's "Plan a preparation" (topic the property
+    // can't match → 0 actionable → the host-authored fallback form is shown).
+    await page.goto("/dashboard/guests");
+    await page.getByRole("link", { name: /Maria & Tom/ }).click();
+    await expect(page).toHaveURL(GUEST_URL);
+    await page.locator('select[name="stayId"]').selectOption({ index: 0 });
+    await page.locator('input[name="topics"][value="architecture"]').check();
+    await page.getByRole("button", { name: /See what we can prepare/ }).click();
+    await expect(page).toHaveURL(FEAS_URL);
+    const feasUrl = page.url();
+
+    // First fallback submission → one Preparation.
+    await page.locator('input[name="title"]').fill("Lay out local architecture books");
+    await page.getByRole("button", { name: /Create preparation/ }).click();
+    await expect(page).toHaveURL(PREP_URL);
+    const url1 = page.url();
+
+    // Return to the SAME withholding run; the form re-renders with a fresh key. Submit
+    // DIFFERENT content → a NEW key → a NEW Preparation (no fingerprint conflict banner).
+    await page.goto(feasUrl);
+    await page.locator('input[name="title"]').fill("Print a quiet city map instead");
+    await page.getByRole("button", { name: /Create preparation/ }).click();
+    await expect(page).toHaveURL(PREP_URL);
+    const url2 = page.url();
+
+    expect(url2).not.toEqual(url1);
+    await expect(page.getByTestId("fallback-conflict")).toHaveCount(0);
   });
 });

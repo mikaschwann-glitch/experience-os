@@ -7,9 +7,7 @@ import { getDb } from "@/db/client";
 import { stays } from "@/db/schema";
 import { getAuthContext } from "@/lib/auth/devAuth";
 import {
-  createHostAction,
   createInsightFromSignal,
-  createRecommendationFromInsight,
   createSignal,
   logOutcome,
   setRecommendationStatus,
@@ -48,22 +46,6 @@ export async function createInsightAction(
   revalidateGuest(guestId);
 }
 
-export async function createRecommendationAction(
-  insightId: string,
-  guestId: string,
-  formData: FormData,
-) {
-  const { tenantId, userId } = await getAuthContext();
-  const title = String(formData.get("title") ?? "").trim();
-  const description = String(formData.get("description") ?? "").trim();
-  if (!title) return;
-  await createRecommendationFromInsight(tenantId, userId, insightId, {
-    title,
-    description: description || null,
-  });
-  revalidateGuest(guestId);
-}
-
 export async function acceptRecommendationAction(
   recommendationId: string,
   guestId: string,
@@ -79,18 +61,6 @@ export async function dismissRecommendationAction(
 ) {
   const { tenantId, userId } = await getAuthContext();
   await setRecommendationStatus(tenantId, userId, recommendationId, "dismissed");
-  revalidateGuest(guestId);
-}
-
-export async function createHostActionAction(
-  recommendationId: string,
-  guestId: string,
-  formData: FormData,
-) {
-  const { tenantId, userId } = await getAuthContext();
-  const title = String(formData.get("title") ?? "").trim();
-  if (!title) return;
-  await createHostAction(tenantId, userId, recommendationId, { title });
   revalidateGuest(guestId);
 }
 

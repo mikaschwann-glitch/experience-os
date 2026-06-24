@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import { getDb } from "@/db/client";
+import { getDb, type Executor } from "@/db/client";
 import {
   hostActions,
   insights,
@@ -19,17 +19,27 @@ import { emitEvent } from "@/lib/events/events";
  * Every mutation runs inside a transaction together with emitEvent(), so the
  * domain write and its event commit or roll back atomically. The chain is tied
  * together by a single correlationId minted when the signal is created.
+ *
+ * Wave 1A — each write accepts an optional Executor (tx) so several writes can be
+ * composed onto ONE transaction by the createOrGetPreparation boundary. With no
+ * executor the write opens its own transaction (unchanged standalone behaviour).
  */
+
+/** Run `fn` on the given executor, or open a fresh transaction when none is given. */
+async function run<T>(tx: Executor | undefined, fn: (db: Executor) => Promise<T>): Promise<T> {
+  if (tx) return fn(tx);
+  return getDb().transaction((t) => fn(t));
+}
 
 export async function createSignal(
   tenantId: string,
   userId: string,
   input: { guestId: string; stayId?: string | null; body: string },
+  tx?: Executor,
 ) {
-  const db = getDb();
-  return db.transaction(async (tx) => {
+  return run(tx, async (db) => {
     const correlationId = randomUUID();
-    const [signal] = await tx
+    const [signal] = await db
       .insert(signals)
       .values({
         tenantId,
@@ -42,7 +52,7 @@ export async function createSignal(
       })
       .returning();
 
-    await emitEvent(tx, {
+    await emitEvent(db, {
       tenantId,
       actorUserId: userId,
       type: "signal.created",
@@ -61,17 +71,17 @@ export async function createInsightFromSignal(
   userId: string,
   signalId: string,
   input: { summary: string; detail?: string | null },
+  tx?: Executor,
 ) {
-  const db = getDb();
-  return db.transaction(async (tx) => {
-    const [signal] = await tx
+  return run(tx, async (db) => {
+    const [signal] = await db
       .select()
       .from(signals)
       .where(and(eq(signals.tenantId, tenantId), eq(signals.id, signalId)))
       .limit(1);
     if (!signal) throw new Error("Signal not found for tenant.");
 
-    const [insight] = await tx
+    const [insight] = await db
       .insert(insights)
       .values({
         tenantId,
@@ -84,7 +94,7 @@ export async function createInsightFromSignal(
       })
       .returning();
 
-    await emitEvent(tx, {
+    await emitEvent(db, {
       tenantId,
       actorUserId: userId,
       type: "insight.created",
@@ -108,23 +118,23 @@ export async function createRecommendationFromInsight(
     rationale?: string | null;
     effort?: string | null;
     // Optional stay scope + provenance (used by the reactive first-party fallback).
-    // Defaults preserve the generic manual path (stayId null, status pending,
-    // trigger_source null, externally_researched false).
+    // A stay-less recommendation can never become operational work (createHostAction
+    // refuses it) — it remains a non-operational suggestion only.
     stayId?: string | null;
     status?: "pending" | "accepted";
     triggerSource?: "guest_stated" | "host_noted" | "system_profile_match" | null;
   },
+  tx?: Executor,
 ) {
-  const db = getDb();
-  return db.transaction(async (tx) => {
-    const [insight] = await tx
+  return run(tx, async (db) => {
+    const [insight] = await db
       .select()
       .from(insights)
       .where(and(eq(insights.tenantId, tenantId), eq(insights.id, insightId)))
       .limit(1);
     if (!insight) throw new Error("Insight not found for tenant.");
 
-    const [recommendation] = await tx
+    const [recommendation] = await db
       .insert(recommendations)
       .values({
         tenantId,
@@ -145,20 +155,20 @@ export async function createRecommendationFromInsight(
 
     // Same-tenant consistency: both rows are already tenant-scoped above, so the
     // join row can only ever link a recommendation and insight of this tenant.
-    await tx.insert(recommendationInsights).values({
+    await db.insert(recommendationInsights).values({
       tenantId,
       recommendationId: recommendation.id,
       insightId: insight.id,
     });
 
-    await emitEvent(tx, {
+    await emitEvent(db, {
       tenantId,
       actorUserId: userId,
       type: "recommendation.created",
       entityType: "recommendation",
       entityId: recommendation.id,
       correlationId: insight.correlationId,
-      payload: { guestId: recommendation.guestId, insightId: insight.id, status: "pending" },
+      payload: { guestId: recommendation.guestId, insightId: insight.id, status: recommendation.status },
     });
 
     return recommendation;
@@ -170,10 +180,10 @@ export async function setRecommendationStatus(
   userId: string,
   recommendationId: string,
   status: "accepted" | "dismissed",
+  tx?: Executor,
 ) {
-  const db = getDb();
-  return db.transaction(async (tx) => {
-    const [updated] = await tx
+  return run(tx, async (db) => {
+    const [updated] = await db
       .update(recommendations)
       .set({ status, updatedAt: new Date() })
       .where(
@@ -185,7 +195,7 @@ export async function setRecommendationStatus(
       .returning();
     if (!updated) throw new Error("Recommendation not found for tenant.");
 
-    await emitEvent(tx, {
+    await emitEvent(db, {
       tenantId,
       actorUserId: userId,
       type: status === "accepted" ? "recommendation.accepted" : "recommendation.dismissed",
@@ -204,10 +214,10 @@ export async function createHostAction(
   userId: string,
   recommendationId: string,
   input: { title: string; description?: string | null },
+  tx?: Executor,
 ) {
-  const db = getDb();
-  return db.transaction(async (tx) => {
-    const [recommendation] = await tx
+  return run(tx, async (db) => {
+    const [recommendation] = await db
       .select()
       .from(recommendations)
       .where(
@@ -218,13 +228,24 @@ export async function createHostAction(
       )
       .limit(1);
     if (!recommendation) throw new Error("Recommendation not found for tenant.");
+    // Wave 1A invariant (server backstop): an operational Preparation MUST be
+    // stay-bound. The stay is copied from its provenance recommendation, which is
+    // authoritative. A stay-less recommendation can never become operational work —
+    // this isolates the legacy stay-less manual path regardless of which UI calls it.
+    if (!recommendation.stayId) {
+      throw new Error(
+        "Cannot create a stay-less operational preparation: the recommendation has no stay.",
+      );
+    }
 
-    const [action] = await tx
+    const [action] = await db
       .insert(hostActions)
       .values({
         tenantId,
         recommendationId: recommendation.id,
         guestId: recommendation.guestId,
+        // Direct, authoritative operational stay relation (Wave 1A).
+        stayId: recommendation.stayId,
         title: input.title,
         description: input.description ?? null,
         status: "planned",
@@ -232,14 +253,19 @@ export async function createHostAction(
       })
       .returning();
 
-    await emitEvent(tx, {
+    await emitEvent(db, {
       tenantId,
       actorUserId: userId,
       type: "host_action.created",
       entityType: "host_action",
       entityId: action.id,
       correlationId: recommendation.correlationId,
-      payload: { guestId: action.guestId, recommendationId: recommendation.id, status: "planned" },
+      payload: {
+        guestId: action.guestId,
+        recommendationId: recommendation.id,
+        stayId: action.stayId,
+        status: "planned",
+      },
     });
 
     return action;

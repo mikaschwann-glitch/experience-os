@@ -27,6 +27,7 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 // Shared provenance enum lives in a leaf module (no intra-schema imports) so it is
 // initialized before the recommendations + feasibility_runs tables that use it.
 import { triggerSourceEnum } from "./enums";
@@ -63,6 +64,12 @@ export const signalTypeEnum = pgEnum("signal_type", [
   "call",
   "booking",
   "other",
+]);
+// Wave 1A — idempotency lifecycle for the single transactional creation boundary.
+export const preparationIntentStatusEnum = pgEnum("preparation_intent_status", [
+  "processing",
+  "succeeded",
+  "failed",
 ]);
 
 // ---- Shared column helpers ----
@@ -331,16 +338,35 @@ export const hostActions = pgTable(
     guestId: uuid("guest_id")
       .notNull()
       .references(() => guests.id, { onDelete: "cascade" }),
+    // Wave 1A — direct, authoritative operational stay relation. Nullable for now
+    // (legacy/quarantined rows may be null); becomes NOT NULL in Wave 2 after legacy
+    // cleanup. RESTRICT: a stay with operational work cannot be physically deleted —
+    // a cancelled/changed stay is a soft-status record, never a silent disappearance.
+    stayId: uuid("stay_id").references(() => stays.id, { onDelete: "restrict" }),
     title: text("title").notNull(),
     description: text("description"),
     status: hostActionStatusEnum("status").notNull().default("planned"),
     dueAt: timestamp("due_at", { withTimezone: true }),
+    // Wave 1A — legacy isolation. A quarantined/archived row is retained for audit
+    // but excluded from every host read model (PreparationWorkItem filters these out).
+    // Provenance distinguishes a migration-quarantined row from a host-cancelled one:
+    // archived_by = 'system_migration' | <userId>, archive_batch_id = e.g. 'wave1a_0006'.
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    archiveReason: text("archive_reason"),
+    archivedBy: text("archived_by"),
+    archiveBatchId: text("archive_batch_id"),
     correlationId: uuid("correlation_id").notNull(),
     ...timestamps,
   },
   (t) => [
     index("host_actions_tenant_idx").on(t.tenantId),
     index("host_actions_guest_idx").on(t.guestId),
+    index("host_actions_stay_idx").on(t.tenantId, t.stayId),
+    // One Preparation per recommendation — the DB backstop for createOrGetPreparation
+    // idempotency. Partial: legacy/rec-less rows are exempt.
+    uniqueIndex("host_actions_recommendation_uq")
+      .on(t.recommendationId)
+      .where(sql`recommendation_id IS NOT NULL`),
   ],
 );
 
@@ -394,6 +420,42 @@ export const events = pgTable(
     index("events_tenant_occurred_idx").on(t.tenantId, t.occurredAt),
     index("events_correlation_idx").on(t.correlationId),
     index("events_entity_idx").on(t.entityType, t.entityId),
+  ],
+);
+
+// Wave 1A — Idempotency boundary for the single transactional creation path.
+// One row per logical submission attempt (NOT per form lifetime). The whole
+// createOrGetPreparation transaction (validate → recommendation → host_action →
+// audit → persist ids → mark succeeded) commits atomically with this row.
+export const preparationIntents = pgTable(
+  "preparation_intents",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: tenantCol(),
+    initiatorUserId: uuid("initiator_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    idempotencyKey: text("idempotency_key").notNull(),
+    // Hash of the logical request; a same-key/different-fingerprint retry is a conflict.
+    requestFingerprint: text("request_fingerprint").notNull(),
+    status: preparationIntentStatusEnum("status").notNull().default("processing"),
+    recommendationId: uuid("recommendation_id").references(() => recommendations.id, {
+      onDelete: "set null",
+    }),
+    preparationId: uuid("preparation_id").references(() => hostActions.id, {
+      onDelete: "set null",
+    }),
+    stayId: uuid("stay_id").references(() => stays.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [
+    // Same user + same key serialises here; the loser reads the winner's committed result.
+    uniqueIndex("preparation_intents_key_uq").on(
+      t.tenantId,
+      t.initiatorUserId,
+      t.idempotencyKey,
+    ),
+    index("preparation_intents_tenant_idx").on(t.tenantId),
   ],
 );
 

@@ -17,6 +17,9 @@ export type DomainEventType =
   | "host_action.created"
   | "host_action.updated"
   | "outcome.created"
+  // Wave 1A — the single transactional creation boundary committed exactly one
+  // Preparation (host_action) for a stay, idempotently.
+  | "preparation.created"
   // Wave 2A — Pre-Arrival Intelligence Simulation Lab lifecycle (additive; PII-light payloads).
   | "consent.granted"
   | "consent.withdrawn"

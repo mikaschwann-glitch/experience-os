@@ -231,10 +231,12 @@ export async function seedDatabase() {
       rationale:
         "Built from what they told us: the anniversary note, the sunrise question, and a clear preference for quiet, alcohol-free gestures.",
       effort: "low",
+      // Wave 1A: an operational Preparation must be stay-bound. The seed's vertical
+      // slice now carries the stay so createHostAction can bind it directly.
+      stayId,
+      status: "accepted",
     },
   );
-
-  await setRecommendationStatus(tenantId, userId, recommendation.id, "accepted");
 
   const action = await createHostAction(tenantId, userId, recommendation.id, {
     title: "Prepare private sunrise breakfast (Ocean Cabin 02)",

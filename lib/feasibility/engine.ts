@@ -164,6 +164,11 @@ async function runFeasibilityCore(input: {
   const db = getDb();
 
   // ---- Active property knowledge ----
+  // Wave 1 learning-safety boundary is at the PROMOTION path (promoteLearningDraft is
+  // disabled / review-only), NOT here: a Learning Draft can never create a matchable
+  // source, so the matcher simply uses each property's own active knowledge by its own
+  // rules. No global subtraction of "learning-derived" ids (that would wrongly remove
+  // valid base sources from matching).
   const [caps, insights, playbooks, constraints] = await Promise.all([
     db.select().from(propertyCapabilities).where(and(eq(propertyCapabilities.tenantId, tenantId), eq(propertyCapabilities.propertyId, propertyId))),
     db.select().from(localInsights).where(and(eq(localInsights.tenantId, tenantId), eq(localInsights.propertyId, propertyId))),

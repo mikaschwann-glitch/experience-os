@@ -299,7 +299,8 @@ export default async function PropertyIntelligencePage({
         <section className="mt-6" data-testid="learning-drafts">
           <SectionTitle>Learning drafts</SectionTitle>
           <p className="mt-1 mb-3 text-[12.5px] leading-relaxed" style={{ color: C.muted }}>
-            Captured from completed outcomes. Nothing here is active knowledge until you promote it.
+            Captured from completed outcomes. Drafts are review-only — nothing here can
+            become active, matchable property knowledge yet. You can review or discard them.
           </p>
           <div className="space-y-2">
             {learningDrafts.map((d) => {
@@ -323,34 +324,15 @@ export default async function PropertyIntelligencePage({
                   </div>
                   {dtags.length > 0 ? <Chips values={dtags} /> : null}
 
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <details data-testid="promote-draft">
-                      <summary
-                        className="flex cursor-pointer items-center gap-1.5 text-[12.5px] font-medium [&::-webkit-details-marker]:hidden"
-                        style={{ listStyleType: "none", color: C.clay }}
-                      >
-                        <Icon name="check" size={14} /> Review and promote
-                      </summary>
-                      <form
-                        action={promoteLearningDraftAction.bind(null, d.id, selected.id)}
-                        className="mt-3 space-y-2"
-                      >
-                        <Field label="Title for the new item (editable)">
-                          <TextInput name="title" defaultValue={draftTitle(d.note)} required />
-                        </Field>
-                        {d.learningType === "constraint" ? (
-                          <Field label="Severity">
-                            <Select name="severity" defaultValue="soft" style={{ width: 200 }}>
-                              <option value="soft">Soft (prefer to avoid)</option>
-                              <option value="hard">Hard (never)</option>
-                            </Select>
-                          </Field>
-                        ) : null}
-                        <SubmitButton type="submit">
-                          Promote to {LEARNING_TYPE_LABEL[d.learningType] ?? "item"}
-                        </SubmitButton>
-                      </form>
-                    </details>
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                    <span
+                      className="flex items-center gap-1.5 text-[12.5px]"
+                      style={{ color: C.muted }}
+                      data-testid="promote-disabled"
+                    >
+                      <Icon name="circle" size={13} /> Review only — promotion to active
+                      property knowledge isn’t available yet.
+                    </span>
                     <form action={discardLearningDraftAction.bind(null, d.id, selected.id)}>
                       <SubmitButton type="submit" variant="ghost" style={{ padding: "4px 10px", fontSize: 12 }}>
                         Discard

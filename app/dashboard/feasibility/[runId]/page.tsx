@@ -12,7 +12,6 @@ import {
   SectionTitle,
   SubmitButton,
   Tag,
-  TextInput,
 } from "../../_components/ui";
 import {
   confirmProposalAction,
@@ -20,6 +19,7 @@ import {
   notUsefulProposalAction,
   rejectProposalAction,
 } from "./actions";
+import { FallbackForm } from "./FallbackForm";
 
 export const dynamic = "force-dynamic";
 
@@ -109,7 +109,7 @@ function ProposalCard({ runId, guestId, p }: { runId: string; guestId?: string; 
         <div className="mt-3 flex flex-wrap items-center gap-2 pt-3" style={{ borderTop: `1px solid ${C.soft}` }}>
           <form action={confirmProposalAction.bind(null, runId, p.id, guestId)}>
             <SubmitButton type="submit">
-              <Icon name="check" size={15} /> Confirm &amp; add to tasks
+              <Icon name="check" size={15} /> Create preparation
             </SubmitButton>
           </form>
           <form action={rejectProposalAction.bind(null, runId, p.id, guestId)}>
@@ -125,12 +125,19 @@ function ProposalCard({ runId, guestId, p }: { runId: string; guestId?: string; 
           className="mt-3 flex flex-wrap items-center gap-2 pt-3 text-[12.5px]"
           style={{ borderTop: `1px solid ${C.soft}`, color: C.muted }}
         >
-          <Icon name="check" size={13} /> Added to the host&rsquo;s tasks.
+          <Icon name="check" size={13} /> Preparation created.
+          <Link
+            href="/dashboard/preparations"
+            className="font-medium no-underline"
+            style={{ color: C.clay }}
+          >
+            View preparations &rarr;
+          </Link>
           {guestId ? (
             <Link
               href={`/dashboard/guests/${guestId}`}
               className="font-medium no-underline"
-              style={{ color: C.clay }}
+              style={{ color: C.muted }}
             >
               Open guest &rarr;
             </Link>
@@ -141,8 +148,15 @@ function ProposalCard({ runId, guestId, p }: { runId: string; guestId?: string; 
   );
 }
 
-export default async function FeasibilityRunPage({ params }: { params: Promise<{ runId: string }> }) {
+export default async function FeasibilityRunPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ runId: string }>;
+  searchParams: Promise<{ retry?: string }>;
+}) {
   const { runId } = await params;
+  const { retry } = await searchParams;
   const { tenantId } = await getAuthContext();
   const detail = await getFeasibilityRun(tenantId, runId);
   if (!detail) notFound();
@@ -152,6 +166,16 @@ export default async function FeasibilityRunPage({ params }: { params: Promise<{
 
   return (
     <div>
+      {retry === "conflict" ? (
+        <div
+          className="mb-4 rounded-lg px-4 py-3 text-[13px]"
+          style={{ background: C.warn, color: C.clayDark, border: `1px solid ${C.soft}` }}
+          data-testid="fallback-conflict"
+        >
+          Your preparation changed since the last attempt — please review the text and
+          submit it again.
+        </div>
+      ) : null}
       <div className="mb-4 flex items-center gap-2 text-[13px]" style={{ color: C.muted }}>
         <Link href="/dashboard/research-lab" className="no-underline" style={{ color: C.muted }}>
           Research Lab
@@ -204,21 +228,7 @@ export default async function FeasibilityRunPage({ params }: { params: Promise<{
                         You can still prepare something yourself for this stay — your own note, not a
                         system suggestion.
                       </div>
-                      <form
-                        action={createFallbackAction.bind(null, run.id, guestId)}
-                        className="mt-2 flex flex-wrap items-end gap-2"
-                      >
-                        <div className="min-w-[240px] flex-1">
-                          <TextInput
-                            name="title"
-                            required
-                            placeholder="Your own preparation, e.g. “Lay out a quiet hiking map”"
-                          />
-                        </div>
-                        <SubmitButton type="submit" variant="ghost">
-                          Create your own preparation
-                        </SubmitButton>
-                      </form>
+                      <FallbackForm action={createFallbackAction.bind(null, run.id, guestId)} />
                     </div>
                   ) : null}
                 </Card>

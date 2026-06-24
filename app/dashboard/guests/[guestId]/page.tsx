@@ -23,9 +23,7 @@ import {
 } from "../../_components/ui";
 import {
   acceptRecommendationAction,
-  createHostActionAction,
   createInsightAction,
-  createRecommendationAction,
   createSignalAction,
   dismissRecommendationAction,
   logOutcomeAction,
@@ -296,17 +294,6 @@ export default async function GuestMemoryPage({
                     <div className="mt-1 text-[11px] uppercase tracking-[0.05em]" style={{ color: C.muted }}>
                       {i.generatedBy}
                     </div>
-                    <form
-                      action={createRecommendationAction.bind(null, i.id, guest.id)}
-                      className="mt-3 space-y-2 pt-3"
-                      style={{ borderTop: `1px solid ${C.soft}` }}
-                    >
-                      <TextInput name="title" required placeholder="Recommendation title…" />
-                      <TextInput name="description" placeholder="Short description (optional)…" />
-                      <SubmitButton type="submit" variant="ghost">
-                        Create recommendation
-                      </SubmitButton>
-                    </form>
                   </Card>
                 ))
               )}
@@ -357,27 +344,15 @@ export default async function GuestMemoryPage({
                     ) : null}
 
                     {r.status === "accepted" ? (
-                      actionedRecIds.has(r.id) ? (
-                        <p
-                          className="mt-3 flex items-center gap-1.5 pt-3 text-[12.5px]"
-                          style={{ borderTop: `1px solid ${C.soft}`, color: C.muted }}
-                        >
-                          <Icon name="check" size={13} /> Added to host actions.
-                        </p>
-                      ) : (
-                        <form
-                          action={createHostActionAction.bind(null, r.id, guest.id)}
-                          className="mt-3 flex flex-wrap items-end gap-2 pt-3"
-                          style={{ borderTop: `1px solid ${C.soft}` }}
-                        >
-                          <div className="min-w-[220px] flex-1">
-                            <TextInput name="title" required placeholder="Host action to prepare…" />
-                          </div>
-                          <SubmitButton type="submit" variant="ghost">
-                            Plan host action
-                          </SubmitButton>
-                        </form>
-                      )
+                      <p
+                        className="mt-3 flex items-center gap-1.5 pt-3 text-[12.5px]"
+                        style={{ borderTop: `1px solid ${C.soft}`, color: C.muted }}
+                      >
+                        <Icon name="check" size={13} />{" "}
+                        {actionedRecIds.has(r.id)
+                          ? "Added to preparations."
+                          : "Use “Plan a preparation” above to prepare this for a stay."}
+                      </p>
                     ) : null}
                   </Card>
                 ))
@@ -385,9 +360,9 @@ export default async function GuestMemoryPage({
             </div>
           </section>
 
-          {/* Host actions -> log outcome */}
+          {/* Preparations -> recover (link to detail) / log outcome */}
           <section>
-            <SectionTitle>Host actions</SectionTitle>
+            <SectionTitle>Preparations</SectionTitle>
             <div className="mt-3 space-y-3">
               {hostActions.length === 0 ? (
                 <Card>
@@ -401,9 +376,13 @@ export default async function GuestMemoryPage({
                         <span className="mt-0.5 shrink-0" style={{ color: C.muted }}>
                           <Icon name="clipboard" size={16} />
                         </span>
-                        <div className="text-[14px] font-medium" style={{ color: C.ink }}>
+                        <Link
+                          href={`/dashboard/preparations/${h.id}`}
+                          className="text-[14px] font-medium no-underline"
+                          style={{ color: C.ink }}
+                        >
                           {h.title}
-                        </div>
+                        </Link>
                       </div>
                       <StatusBadge status={h.status} />
                     </div>

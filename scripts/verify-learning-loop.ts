@@ -35,7 +35,7 @@ import {
 import { getAuthContext } from "@/lib/auth/devAuth";
 import { getGuestByName, reviewBrief, runSubject } from "@/lib/research/engine";
 import { getScenario } from "@/lib/research/fixtures";
-import { evaluateFeasibility } from "@/lib/feasibility/engine";
+import { evaluateFeasibility, evaluateFirstPartyFeasibility } from "@/lib/feasibility/engine";
 import { acceptProposal, convertProposalToHostAction } from "@/lib/repositories/feasibility";
 import {
   createHostAction,
@@ -51,6 +51,7 @@ import {
   listLearningDrafts,
   promoteLearningDraft,
 } from "@/lib/repositories/learning";
+import { createCapability } from "@/lib/repositories/propertyIntelligence";
 
 let pass = 0;
 let fail = 0;
@@ -105,7 +106,10 @@ async function main() {
     return s;
   };
   // Build a manual-chain outcome. linkedStayId !== null causally links the
-  // recommendation to a stay (authoritative); null leaves it unlinked.
+  // recommendation to a stay (authoritative). Wave 1A: an operational host_action
+  // must be stay-bound at creation, so the "unlinked" case binds a throwaway stay
+  // and then DETACHES the recommendation's stay to simulate a lost/legacy causal
+  // stay — the only way an outcome can now lack a causal property.
   const makeOutcome = async (
     guestId: string,
     linkedStayId: string | null,
@@ -114,16 +118,22 @@ async function main() {
   ) => {
     const sig = await createSignal(tenantId, userId, { guestId, body: "probe signal" });
     const ins = await createInsightFromSignal(tenantId, userId, sig.id, { summary: "probe insight" });
-    const rec = await createRecommendationFromInsight(tenantId, userId, ins.id, { title: "probe rec" });
-    if (linkedStayId) {
+    const bindStayId = linkedStayId ?? (await makeStay(guestId, atlantic.id, "2020-01-01", "2020-01-02")).id;
+    const rec = await createRecommendationFromInsight(tenantId, userId, ins.id, {
+      title: "probe rec",
+      stayId: bindStayId,
+      status: "accepted",
+    });
+    const ha = await createHostAction(tenantId, userId, rec.id, { title: "probe action" });
+    const outcome = await logOutcome(tenantId, userId, ha.id, { result, notes });
+    if (!linkedStayId) {
+      // Lost causal stay → the outcome can no longer resolve a property (refusal path).
       await db
         .update(recommendations)
-        .set({ stayId: linkedStayId })
+        .set({ stayId: null })
         .where(and(eq(recommendations.tenantId, tenantId), eq(recommendations.id, rec.id)));
     }
-    await setRecommendationStatus(tenantId, userId, rec.id, "accepted");
-    const ha = await createHostAction(tenantId, userId, rec.id, { title: "probe action" });
-    return logOutcome(tenantId, userId, ha.id, { result, notes });
+    return outcome;
   };
   const draftsForOutcome = async (outcomeId: string) =>
     db
@@ -167,14 +177,31 @@ async function main() {
   check("isolation: draft appears under its own property (Atlantic)", atlanticDrafts.some((d) => d.id === gretaDraft.id));
   check("isolation: draft does NOT appear under another property (Pine Ridge)", !pineDrafts.some((d) => d.id === gretaDraft.id));
 
+  // ===== Wave 1 learning safety: promotion is REVIEW-ONLY. The boundary is the
+  // promotion/materialisation path — a draft may NOT create a matchable source — NOT a
+  // matcher subtraction. Regression: a host-authored, active capability stays matchable
+  // before and after a related draft is captured + "promoted"; the draft creates no
+  // matchable source. =====
+  const mariaLc = (await getGuestByName(tenantId, "Maria & Tom"))!;
+  const [mariaLcStay] = await db.select().from(stays).where(and(eq(stays.tenantId, tenantId), eq(stays.guestId, mariaLc.id))).limit(1);
+  await createCapability(tenantId, userId, atlantic.id, {
+    title: "Welcome food platter",
+    description: "A host-authored, active local-food welcome capability.",
+    categoryTags: ["food"],
+  });
+  const foodRunBefore = await evaluateFirstPartyFeasibility(tenantId, userId, { stayId: mariaLcStay.id, topics: ["food"], triggerSource: "host_noted", sourceSignalId: null, guestId: mariaLc.id });
+  check("regression setup: a host-authored food capability matches a food run", foodRunBefore.actionable >= 1);
   const capsBefore = (await db.select().from(propertyCapabilities).where(and(eq(propertyCapabilities.tenantId, tenantId), eq(propertyCapabilities.propertyId, atlantic.id)))).length;
-  const promoted = await promoteLearningDraft(tenantId, userId, gretaDraft.id, {});
-  const [newCap] = await db.select().from(propertyCapabilities).where(and(eq(propertyCapabilities.tenantId, tenantId), eq(propertyCapabilities.id, promoted.itemId))).limit(1);
-  check("promote: capability created on the SAME property (Atlantic), carrying the note", !!newCap && newCap.propertyId === atlantic.id && newCap.description === "Early breakfast works well when arranged the evening before.");
+
+  await expectThrow("promote: a learning draft is REVIEW-ONLY (promotion refused)", () => promoteLearningDraft(tenantId, userId, gretaDraft.id, {}));
   const capsAfter = (await db.select().from(propertyCapabilities).where(and(eq(propertyCapabilities.tenantId, tenantId), eq(propertyCapabilities.propertyId, atlantic.id)))).length;
-  check("promote: exactly one new capability (no overwrite/auto-merge)", capsAfter === capsBefore + 1);
-  check("promote: a promoted draft leaves the open-drafts queue", !(await listLearningDrafts(tenantId, atlantic.id)).some((d) => d.id === gretaDraft.id));
-  await expectThrow("promote: a promoted draft cannot be re-promoted", () => promoteLearningDraft(tenantId, userId, gretaDraft.id, {}));
+  check("promote: refused promotion created NO new matchable capability", capsAfter === capsBefore);
+  check("promote: the draft stays in the open-drafts queue (review-only)", (await listLearningDrafts(tenantId, atlantic.id)).some((d) => d.id === gretaDraft.id));
+
+  const foodRunAfter = await evaluateFirstPartyFeasibility(tenantId, userId, { stayId: mariaLcStay.id, topics: ["food"], triggerSource: "host_noted", sourceSignalId: null, guestId: mariaLc.id });
+  check("regression: the host-authored capability remains matchable after the draft (unchanged)", foodRunAfter.actionable === foodRunBefore.actionable && foodRunAfter.actionable >= 1);
+  const foodProps = await db.select().from(feasibilityProposals).where(and(eq(feasibilityProposals.tenantId, tenantId), eq(feasibilityProposals.runId, foodRunAfter.runId), eq(feasibilityProposals.status, "proposed")));
+  check("regression: matched food proposals link a host-authored capability (no draft-derived source exists)", foodProps.length >= 1 && foodProps.every((p) => !!p.linkedCapabilityId));
 
   // ===== (2)+(3) Repeat guest: older LINKED stay wins; unlinked is refused =====
   // Repeat visitor with an OLD Atlantic stay and a NEWER Pine Ridge stay. The
@@ -218,11 +245,10 @@ async function main() {
     tags: ["adventure"],
   });
   check("constraint capture resolves to the linked stay's property (Atlantic)", claraDraft.propertyId === atlantic.id);
-  const promotedConstraint = await promoteLearningDraft(tenantId, userId, claraDraft.id, { severity: "hard" });
-  const [newRule] = await db.select().from(propertyConstraints).where(and(eq(propertyConstraints.tenantId, tenantId), eq(propertyConstraints.id, promotedConstraint.itemId))).limit(1);
-  check("promote: a hard constraint is created on Atlantic", !!newRule && newRule.propertyId === atlantic.id && newRule.severity === "hard");
-  const activeRules = await db.select().from(propertyConstraints).where(and(eq(propertyConstraints.tenantId, tenantId), eq(propertyConstraints.propertyId, atlantic.id), eq(propertyConstraints.active, true)));
-  check("readable: promoted constraint is now ACTIVE property knowledge", activeRules.some((r) => r.id === promotedConstraint.itemId));
+  const constraintsBefore = (await db.select().from(propertyConstraints).where(and(eq(propertyConstraints.tenantId, tenantId), eq(propertyConstraints.propertyId, atlantic.id)))).length;
+  await expectThrow("constraint promote is REVIEW-ONLY (promotion refused)", () => promoteLearningDraft(tenantId, userId, claraDraft.id, { severity: "hard" }));
+  const constraintsAfter = (await db.select().from(propertyConstraints).where(and(eq(propertyConstraints.tenantId, tenantId), eq(propertyConstraints.propertyId, atlantic.id)))).length;
+  check("constraint promote: refused promotion created NO new constraint", constraintsAfter === constraintsBefore);
 
   // ===== No-learning path: a capturable outcome with no capture creates no draft =====
   const noLearnOutcome = await makeOutcome(repeat.id, stayOld.id, "neutral", "nothing notable");

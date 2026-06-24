@@ -9,12 +9,15 @@ import { C, Icon, type IconName } from "./ui";
  * (no decorative-only items). Active state uses a translucent fill + clay inset
  * accent bar, matching the frozen design direction.
  */
+// Wave 1B IA: three durable work surfaces (Today / Guests / Preparations) + the
+// property-knowledge store (Our Place). Recommendations and Research Lab are NOT
+// primary host destinations (provenance / simulation surfaces) — their routes still
+// exist but are reached contextually, not from the rail. Properties is admin/setup.
 const NAV: { label: string; href: string; icon: IconName }[] = [
   { label: "Today", href: "/dashboard", icon: "today" },
   { label: "Guests", href: "/dashboard/guests", icon: "guests" },
-  { label: "Recommendations", href: "/dashboard/recommendations", icon: "recommend" },
-  { label: "Research Lab", href: "/dashboard/research-lab", icon: "clipboard" },
-  { label: "Property Intelligence", href: "/dashboard/property-intelligence", icon: "note" },
+  { label: "Preparations", href: "/dashboard/preparations", icon: "clipboard" },
+  { label: "Our Place", href: "/dashboard/property-intelligence", icon: "note" },
   { label: "Properties", href: "/dashboard/properties", icon: "properties" },
 ];
 

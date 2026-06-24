@@ -253,108 +253,26 @@ export interface PromoteLearningInput {
 }
 
 /**
- * Explicitly promote a draft into a property-private Property Intelligence item.
- * Always INSERTS a new PI row (never overwrites/auto-merges an existing one) and
- * uses the draft's own property_id (server-trusted). Idempotent: a non-draft
- * row is refused. Provenance is preserved on the draft (promoted_item_type/id).
+ * Wave 1 learning-safety boundary (enforced HERE, at the promotion/materialisation
+ * path — not in the matcher): a Learning Draft is REVIEW-ONLY. It may NOT create,
+ * mutate, activate, or materialise a matchable Property Intelligence source. Promotion
+ * to active, matchable knowledge requires the eligibility/governance rules that arrive
+ * in a later wave. A draft can only be reviewed (read) or discarded. Existing
+ * host-authored Capability / Local Insight / Constraint / Playbook sources are
+ * untouched and remain matchable by their own rules.
+ *
+ * Kept as a refusing stub (not deleted) so the PI page + tests have a stable, typed
+ * boundary to assert against; callers (the PI promote action) are gated off in the UI.
  */
 export async function promoteLearningDraft(
-  tenantId: string,
-  userId: string,
-  draftId: string,
-  input: PromoteLearningInput = {},
-) {
-  const draft = await loadDraft(tenantId, draftId);
-  if (!draft) throw new Error("Learning draft not found for this tenant.");
-  if (draft.status !== "draft") throw new Error("Only an open draft can be promoted.");
-
-  const title = (input.title ?? "").trim() || deriveTitle(draft.note);
-  const tags = Array.isArray(draft.tags) ? (draft.tags as string[]) : [];
-
-  // Create the intended PI item. Each create fn re-asserts property-in-tenant and
-  // sanitizes tags, so a stale/foreign property can never be written.
-  let itemId: string;
-  let promotedItemType: string;
-  switch (draft.learningType as LearningType) {
-    case "capability": {
-      const row = await createCapability(tenantId, userId, draft.propertyId, {
-        title,
-        description: draft.note,
-        categoryTags: tags,
-      });
-      itemId = row.id;
-      promotedItemType = "capability";
-      break;
-    }
-    case "local_insight": {
-      const row = await createLocalInsight(tenantId, userId, draft.propertyId, {
-        title,
-        description: draft.note,
-        categoryTags: tags,
-        freshness: "stable",
-      });
-      itemId = row.id;
-      promotedItemType = "local_insight";
-      break;
-    }
-    case "constraint": {
-      const row = await createConstraint(tenantId, userId, draft.propertyId, {
-        title,
-        description: draft.note,
-        ruleType: input.ruleType ?? "exclusion",
-        severity: input.severity ?? "soft",
-        applicabilityTags: tags,
-      });
-      itemId = row.id;
-      promotedItemType = "constraint";
-      break;
-    }
-    case "playbook": {
-      const row = await createPlaybookAction(tenantId, userId, draft.propertyId, {
-        title,
-        description: draft.note,
-        suitableFor: tags,
-      });
-      itemId = row.id;
-      promotedItemType = "playbook";
-      break;
-    }
-    default:
-      throw new Error("Invalid learning type on draft.");
-  }
-
-  const db = getDb();
-  const [updated] = await db.transaction(async (tx) => {
-    const rows = await tx
-      .update(propertyLearningDrafts)
-      .set({
-        status: "promoted",
-        promotedItemType,
-        promotedItemId: itemId,
-        reviewedByUserId: userId,
-        reviewedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(propertyLearningDrafts.tenantId, tenantId),
-          eq(propertyLearningDrafts.id, draftId),
-          eq(propertyLearningDrafts.status, "draft"),
-        ),
-      )
-      .returning();
-    await emitEvent(tx, {
-      tenantId,
-      actorUserId: userId,
-      type: "learning.draft_promoted",
-      entityType: "property_learning_draft",
-      entityId: draftId,
-      payload: { propertyId: draft.propertyId, promotedItemType, promotedItemId: itemId },
-    });
-    return rows;
-  });
-
-  return { draft: updated, itemId, promotedItemType };
+  _tenantId: string,
+  _userId: string,
+  _draftId: string,
+  _input: PromoteLearningInput = {},
+): Promise<never> {
+  throw new Error(
+    "Promotion is not available: a learning draft is review-only and cannot become matchable property knowledge until learning governance exists.",
+  );
 }
 
 /** Discard a draft — it never becomes Property Intelligence knowledge. */

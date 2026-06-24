@@ -5,7 +5,6 @@ import {
   feasibilityProposals,
   feasibilityRuns,
   guests,
-  hostActions,
   prearrivalBriefs,
   properties,
   recommendations,
@@ -13,12 +12,11 @@ import {
   stays,
 } from "@/db/schema";
 import { emitEvent } from "@/lib/events/events";
+import { createHostAction } from "@/lib/repositories/slice";
 import {
-  createHostAction,
-  createInsightFromSignal,
-  createRecommendationFromInsight,
-  createSignal,
-} from "@/lib/repositories/slice";
+  createOrGetPreparation,
+  fingerprintFallback,
+} from "@/lib/repositories/preparations";
 
 /** Tenant-aware reads + host-review writes for feasibility. */
 
@@ -240,192 +238,38 @@ export async function convertProposalToHostAction(tenantId: string, userId: stri
 }
 
 /**
- * Reactive one-step confirm: accept + convert a proposal into EXACTLY ONE canonical
- * recommendation and EXACTLY ONE host action, atomically and idempotently. Repeated
- * submission is a no-op (guarded by the proposal status + a host-action existence
- * check). Composes the existing canonical models — no second task model. Provenance
- * is copied from the run onto the recommendation.
+ * Reactive one-step confirm. Thin wrapper over the single transactional creation
+ * boundary (createOrGetPreparation): idempotent per (tenant, user, proposal),
+ * returns the preparationId, preserves the proposal row-lock (inside materialise),
+ * and copies provenance from the run. Returns { recommendationId, preparationId,
+ * created }.
  */
 export async function confirmProposal(tenantId: string, userId: string, proposalId: string) {
-  const db = getDb();
-  return db.transaction(async (tx) => {
-    // Row-level lock (SELECT ... FOR UPDATE) is the FIRST read and gates the whole
-    // critical section. Concurrent confirms for the same proposal serialize here:
-    // the loser blocks until the winner commits, then re-reads the now-terminal
-    // state below and returns the idempotent no-op. Everything that follows runs on
-    // this same `tx`, so exactly one recommendation + one host action result.
-    const [p] = await tx
-      .select()
-      .from(feasibilityProposals)
-      .where(and(eq(feasibilityProposals.tenantId, tenantId), eq(feasibilityProposals.id, proposalId)))
-      .for("update")
-      .limit(1);
-    if (!p) throw new Error("Proposal not found for this tenant.");
-    if (p.status === "withheld" || p.status === "rejected" || p.status === "not_useful") {
-      throw new Error("This proposal cannot be confirmed.");
-    }
-    // Idempotent: already confirmed → return the existing recommendation, create nothing.
-    if (p.status === "converted_to_host_action") {
-      return { recommendationId: p.recommendationId, created: false };
-    }
-
-    // Ensure exactly one recommendation (copy provenance explicitly from the run).
-    let recommendationId = p.recommendationId;
-    if (!recommendationId) {
-      const [run] = await tx
-        .select({
-          stayId: feasibilityRuns.stayId,
-          triggerSource: feasibilityRuns.triggerSource,
-          externallyResearched: feasibilityRuns.externallyResearched,
-        })
-        .from(feasibilityRuns)
-        .where(and(eq(feasibilityRuns.tenantId, tenantId), eq(feasibilityRuns.id, p.runId)))
-        .limit(1);
-      const correlationId = randomUUID();
-      const [rec] = await tx
-        .insert(recommendations)
-        .values({
-          tenantId,
-          guestId: p.guestId,
-          stayId: run?.stayId ?? null,
-          title: p.title,
-          description: p.description,
-          rationale: p.rationale,
-          effort: p.hostEffort ?? "low",
-          status: "accepted",
-          generatedBy: "rules",
-          triggerSource: run?.triggerSource ?? null,
-          externallyResearched: run?.externallyResearched ?? false,
-          correlationId,
-        })
-        .returning();
-      recommendationId = rec.id;
-      await tx
-        .update(feasibilityProposals)
-        .set({ recommendationId, updatedAt: new Date() })
-        .where(and(eq(feasibilityProposals.tenantId, tenantId), eq(feasibilityProposals.id, proposalId)));
-      await emitEvent(tx, {
-        tenantId,
-        actorUserId: userId,
-        type: "recommendation.created",
-        entityType: "recommendation",
-        entityId: rec.id,
-        correlationId,
-        payload: { guestId: p.guestId, generatedBy: "rules", source: "feasibility" },
-      });
-      await emitEvent(tx, {
-        tenantId,
-        actorUserId: userId,
-        type: "feasibility.proposal_accepted",
-        entityType: "feasibility_proposal",
-        entityId: proposalId,
-        payload: { recommendationId: rec.id },
-      });
-    }
-
-    // Ensure exactly one host action for that recommendation (no duplicate path).
-    const [existingHa] = await tx
-      .select({ id: hostActions.id })
-      .from(hostActions)
-      .where(and(eq(hostActions.tenantId, tenantId), eq(hostActions.recommendationId, recommendationId)))
-      .limit(1);
-    if (!existingHa) {
-      const [rec] = await tx
-        .select({ guestId: recommendations.guestId, correlationId: recommendations.correlationId })
-        .from(recommendations)
-        .where(and(eq(recommendations.tenantId, tenantId), eq(recommendations.id, recommendationId)))
-        .limit(1);
-      const [action] = await tx
-        .insert(hostActions)
-        .values({
-          tenantId,
-          recommendationId,
-          guestId: rec.guestId,
-          title: p.title,
-          description: p.description,
-          status: "planned",
-          correlationId: rec.correlationId,
-        })
-        .returning();
-      await emitEvent(tx, {
-        tenantId,
-        actorUserId: userId,
-        type: "host_action.created",
-        entityType: "host_action",
-        entityId: action.id,
-        correlationId: rec.correlationId,
-        payload: { guestId: action.guestId, recommendationId, status: "planned" },
-      });
-    }
-
-    // Mark converted — idempotency gate for repeated submission.
-    await tx
-      .update(feasibilityProposals)
-      .set({ status: "converted_to_host_action", updatedAt: new Date() })
-      .where(and(eq(feasibilityProposals.tenantId, tenantId), eq(feasibilityProposals.id, proposalId)));
-    await emitEvent(tx, {
-      tenantId,
-      actorUserId: userId,
-      type: "feasibility.proposal_converted",
-      entityType: "feasibility_proposal",
-      entityId: proposalId,
-      payload: { recommendationId },
-    });
-
-    return { recommendationId, created: true };
+  return createOrGetPreparation(tenantId, userId, {
+    idempotencyKey: `proposal:${proposalId}`,
+    requestFingerprint: `proposal:${proposalId}`,
+    source: { kind: "feasibility_proposal", proposalId },
   });
 }
 
 /**
- * Stay-scoped free-form fallback (the host acts when the system withholds). Reuses
- * the canonical signal → insight → recommendation → host_action chain so it stays
- * learning-eligible via recommendation.stayId. Clearly HOST-AUTHORED
- * (generated_by='manual'); never a system recommendation; never externally
- * researched. No LLM, no classification.
+ * Stay-scoped host-authored fallback (the host acts when the system withholds).
+ * Routes through the single transactional creation boundary so it is idempotent
+ * (per the client idempotency key) and returns the preparationId. The canonical
+ * signal -> insight -> recommendation -> host_action chain runs on ONE tx inside
+ * createOrGetPreparation; HOST-AUTHORED, never externally researched. No LLM.
  */
 export async function createStayScopedFallback(
   tenantId: string,
   userId: string,
   runId: string,
-  input: { title: string; description?: string | null },
+  input: { title: string; description?: string | null; idempotencyKey?: string },
 ) {
   const title = input.title.trim();
   if (!title) throw new Error("A preparation is required.");
-
-  const db = getDb();
-  const [run] = await db
-    .select({
-      stayId: feasibilityRuns.stayId,
-      guestId: feasibilityRuns.guestId,
-      sourceSignalId: feasibilityRuns.sourceSignalId,
-      triggerSource: feasibilityRuns.triggerSource,
-    })
-    .from(feasibilityRuns)
-    .where(and(eq(feasibilityRuns.tenantId, tenantId), eq(feasibilityRuns.id, runId)))
-    .limit(1);
-  if (!run) throw new Error("Feasibility run not found for this tenant.");
-  if (!run.stayId) throw new Error("This run has no stay; a stay-scoped preparation cannot be created.");
-
-  // Reuse the original first-party signal where present; otherwise record one so the
-  // signal → insight → recommendation trace is preserved.
-  let signalId = run.sourceSignalId;
-  if (!signalId) {
-    const sig = await createSignal(tenantId, userId, { guestId: run.guestId, stayId: run.stayId, body: title });
-    signalId = sig.id;
-  }
-  const insight = await createInsightFromSignal(tenantId, userId, signalId, {
-    summary: `Host-authored preparation: ${title}`,
+  return createOrGetPreparation(tenantId, userId, {
+    idempotencyKey: input.idempotencyKey ?? randomUUID(),
+    requestFingerprint: fingerprintFallback(runId, title, input.description ?? null),
+    source: { kind: "fallback", runId, title, description: input.description ?? null },
   });
-  const rec = await createRecommendationFromInsight(tenantId, userId, insight.id, {
-    title,
-    description: input.description ?? null,
-    stayId: run.stayId,
-    status: "accepted",
-    triggerSource: run.triggerSource,
-  });
-  const action = await createHostAction(tenantId, userId, rec.id, {
-    title,
-    description: input.description ?? null,
-  });
-  return { recommendationId: rec.id, hostActionId: action.id };
 }

@@ -10,7 +10,7 @@
 import { prepareTestDatabase } from "../setup/testDb";
 import { and, eq } from "drizzle-orm";
 import { getDb, closeDb } from "@/db/client";
-import { events, guests, properties, tenants } from "@/db/schema";
+import { events, guests, properties, stays, tenants } from "@/db/schema";
 import { getAuthContext } from "@/lib/auth/devAuth";
 import {
   createHostAction,
@@ -58,8 +58,18 @@ async function main() {
     .limit(1);
   check("run1: demo guest exists", !!guest);
 
+  // Wave 1A: an operational Preparation must be stay-bound. Resolve the guest's stay
+  // and carry it through the chain so createHostAction can bind it.
+  const [guestStay] = await db
+    .select()
+    .from(stays)
+    .where(and(eq(stays.tenantId, tenantId), eq(stays.guestId, guest.id)))
+    .limit(1);
+  check("run1: demo guest has a stay", !!guestStay);
+
   const signal = await createSignal(tenantId, userId, {
     guestId: guest.id,
+    stayId: guestStay.id,
     body: "E2E: tenth anniversary; quiet sunrise spots.",
   });
   const insight = await createInsightFromSignal(tenantId, userId, signal.id, {
@@ -67,6 +77,8 @@ async function main() {
   });
   const rec = await createRecommendationFromInsight(tenantId, userId, insight.id, {
     title: "E2E: private sunrise breakfast",
+    stayId: guestStay.id,
+    status: "accepted",
   });
   const accepted = await setRecommendationStatus(tenantId, userId, rec.id, "accepted");
   const action = await createHostAction(tenantId, userId, rec.id, {
