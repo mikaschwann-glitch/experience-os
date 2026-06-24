@@ -7,6 +7,7 @@ import {
   hostActions,
   recommendations,
   stays,
+  units,
 } from "@/db/schema";
 
 /**
@@ -26,9 +27,9 @@ import {
  * table — never a post-union filter.
  */
 
-// 'completed' (not 'prepared'): until Wave 2 splits Prepared ≠ Outcome-known, the
-// underlying host_actions.status='done' cannot honestly claim the item was physically
-// prepared (vs. an outcome being logged), so the truthful product label is "Completed".
+// Host-facing kinds. Wave 2 split: 'prepared' (host marked it ready) AND legacy 'done'
+// (outcome-logged) both surface honestly as "Completed" — neither is shown as actionable.
+// 'planned' is the only created-and-still-actionable state.
 export type PreparationKind = "suggested" | "planned" | "completed" | "cancelled";
 
 export interface PreparationWorkItem {
@@ -45,7 +46,11 @@ export interface PreparationWorkItem {
   guestId: string;
   guestName: string;
   propertyId: string | null;
+  /** The home/unit the stay is in (for "what · for whom · where"). */
+  unitName: string | null;
   title: string;
+  /** The concrete "what to do" line shown on the work page. */
+  description: string | null;
   why: string | null;
   /** Explicit due timestamp only; null => "Before arrival" (no fake precision). */
   dueAt: Date | null;
@@ -56,8 +61,8 @@ export interface PreparationWorkItem {
 function fromHostActionStatus(status: string): { kind: PreparationKind; actionable: boolean } {
   if (status === "planned") return { kind: "planned", actionable: true };
   if (status === "cancelled") return { kind: "cancelled", actionable: false };
-  // 'done' — a legacy completion/outcome-logged state. Labelled "Completed", NOT
-  // "Prepared", because the current model cannot distinguish the two (Wave 2).
+  // 'prepared' (host marked ready) and 'done' (legacy outcome-logged) are both
+  // truthfully "Completed" and no longer need the host's attention.
   return { kind: "completed", actionable: false };
 }
 
@@ -74,17 +79,20 @@ export async function listPreparationWorkItems(
       id: hostActions.id,
       status: hostActions.status,
       title: hostActions.title,
+      description: hostActions.description,
       dueAt: hostActions.dueAt,
       stayId: hostActions.stayId,
       guestId: hostActions.guestId,
       guestName: guests.fullName,
       stayStart: stays.startDate,
       propertyId: stays.propertyId,
+      unitName: units.name,
       why: recommendations.rationale,
     })
     .from(hostActions)
     .innerJoin(recommendations, eq(recommendations.id, hostActions.recommendationId))
     .innerJoin(stays, eq(stays.id, hostActions.stayId))
+    .leftJoin(units, eq(units.id, stays.unitId))
     .innerJoin(guests, eq(guests.id, hostActions.guestId))
     .where(
       and(
@@ -110,7 +118,9 @@ export async function listPreparationWorkItems(
       guestId: r.guestId,
       guestName: r.guestName,
       propertyId: r.propertyId,
+      unitName: r.unitName,
       title: r.title,
+      description: r.description,
       why: r.why,
       dueAt: r.dueAt,
       runId: null,
@@ -122,17 +132,20 @@ export async function listPreparationWorkItems(
     .select({
       id: feasibilityProposals.id,
       title: feasibilityProposals.title,
+      description: feasibilityProposals.description,
       why: feasibilityProposals.rationale,
       guestId: feasibilityProposals.guestId,
       guestName: guests.fullName,
       stayId: feasibilityRuns.stayId,
       stayStart: stays.startDate,
       propertyId: stays.propertyId,
+      unitName: units.name,
       runId: feasibilityRuns.id,
     })
     .from(feasibilityProposals)
     .innerJoin(feasibilityRuns, eq(feasibilityRuns.id, feasibilityProposals.runId))
     .innerJoin(stays, eq(stays.id, feasibilityRuns.stayId))
+    .leftJoin(units, eq(units.id, stays.unitId))
     .innerJoin(guests, eq(guests.id, feasibilityProposals.guestId))
     .where(
       and(
@@ -157,7 +170,9 @@ export async function listPreparationWorkItems(
       guestId: r.guestId,
       guestName: r.guestName,
       propertyId: r.propertyId,
+      unitName: r.unitName,
       title: r.title,
+      description: r.description,
       why: r.why,
       dueAt: null,
       runId: r.runId,
@@ -169,17 +184,25 @@ export async function listPreparationWorkItems(
     .select({
       id: recommendations.id,
       title: recommendations.title,
+      description: recommendations.description,
       why: recommendations.rationale,
       guestId: recommendations.guestId,
       guestName: guests.fullName,
       stayId: recommendations.stayId,
       stayStart: stays.startDate,
       propertyId: stays.propertyId,
+      unitName: units.name,
     })
     .from(recommendations)
     .innerJoin(stays, eq(stays.id, recommendations.stayId))
+    .leftJoin(units, eq(units.id, stays.unitId))
     .innerJoin(guests, eq(guests.id, recommendations.guestId))
-    .leftJoin(hostActions, eq(hostActions.recommendationId, recommendations.id))
+    // Tenant_id explicit on the LEFT JOIN too (safe by FK uniqueness, but the union's
+    // invariant is: EVERY joined table is tenant-constrained, never by transitivity).
+    .leftJoin(
+      hostActions,
+      and(eq(hostActions.recommendationId, recommendations.id), eq(hostActions.tenantId, tenantId)),
+    )
     .where(
       and(
         eq(recommendations.tenantId, tenantId),
@@ -203,7 +226,9 @@ export async function listPreparationWorkItems(
       guestId: r.guestId,
       guestName: r.guestName,
       propertyId: r.propertyId,
+      unitName: r.unitName,
       title: r.title,
+      description: r.description,
       why: r.why,
       dueAt: null,
       runId: null,
@@ -222,6 +247,50 @@ export async function getPreparationWorkItem(
 ): Promise<PreparationWorkItem | null> {
   const all = await listPreparationWorkItems(tenantId);
   return all.find((i) => i.sourceType === "host_action" && i.id === preparationId) ?? null;
+}
+
+/**
+ * Wave 2 completion — the alternatives considered for THIS preparation's request: the
+ * sibling proposals from the same feasibility run that were set aside when this one was
+ * chosen. Auditable + non-actionable; surfaced only here (never on Today / Suggested).
+ * Returns null for fallback-originated or unrelated preparations.
+ */
+export async function getOtherIdeasConsidered(
+  tenantId: string,
+  preparationId: string,
+): Promise<{ runId: string; siblings: { id: string; title: string }[] } | null> {
+  const db = getDb();
+  const [ha] = await db
+    .select({ recommendationId: hostActions.recommendationId })
+    .from(hostActions)
+    .where(and(eq(hostActions.tenantId, tenantId), eq(hostActions.id, preparationId)))
+    .limit(1);
+  if (!ha?.recommendationId) return null;
+
+  const [chosen] = await db
+    .select({ runId: feasibilityProposals.runId })
+    .from(feasibilityProposals)
+    .where(
+      and(
+        eq(feasibilityProposals.tenantId, tenantId),
+        eq(feasibilityProposals.recommendationId, ha.recommendationId),
+      ),
+    )
+    .limit(1);
+  if (!chosen) return null;
+
+  const siblings = await db
+    .select({ id: feasibilityProposals.id, title: feasibilityProposals.title })
+    .from(feasibilityProposals)
+    .where(
+      and(
+        eq(feasibilityProposals.tenantId, tenantId),
+        eq(feasibilityProposals.runId, chosen.runId),
+        eq(feasibilityProposals.status, "superseded"),
+      ),
+    );
+  if (siblings.length === 0) return null;
+  return { runId: chosen.runId, siblings };
 }
 
 /** Needs-attention = actionable PreparationWorkItems only (never stay context). */

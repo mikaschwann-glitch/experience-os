@@ -5,6 +5,7 @@ import {
   feasibilityProposals,
   feasibilityRuns,
   guests,
+  hostActions,
   prearrivalBriefs,
   properties,
   recommendations,
@@ -51,13 +52,30 @@ export async function getFeasibilityRun(tenantId: string, runId: string) {
     sourceSignal = s ?? null;
   }
 
+  // A run is "resolved" once a proposal has been converted into a Preparation. The page
+  // then links to that Preparation instead of re-offering the (now set-aside) siblings.
+  const converted = proposals.find((p) => p.status === "converted_to_host_action") ?? null;
+  let createdPreparationId: string | null = null;
+  if (converted?.recommendationId) {
+    const [ha] = await db
+      .select({ id: hostActions.id })
+      .from(hostActions)
+      .where(and(eq(hostActions.tenantId, tenantId), eq(hostActions.recommendationId, converted.recommendationId)))
+      .limit(1);
+    createdPreparationId = ha?.id ?? null;
+  }
+
   return {
     run,
     guest: guest ?? null,
     property: property ?? null,
     sourceSignal,
-    actionable: proposals.filter((p) => p.status !== "withheld"),
+    // Actionable = still-open suggestions only. Converted + superseded never appear here.
+    actionable: proposals.filter((p) => p.status === "proposed" || p.status === "requires_confirmation"),
     withheld: proposals.filter((p) => p.status === "withheld"),
+    superseded: proposals.filter((p) => p.status === "superseded"),
+    converted,
+    createdPreparationId,
   };
 }
 
@@ -238,17 +256,35 @@ export async function convertProposalToHostAction(tenantId: string, userId: stri
 }
 
 /**
- * Reactive one-step confirm. Thin wrapper over the single transactional creation
- * boundary (createOrGetPreparation): idempotent per (tenant, user, proposal),
- * returns the preparationId, preserves the proposal row-lock (inside materialise),
- * and copies provenance from the run. Returns { recommendationId, preparationId,
- * created }.
+ * NORMAL first selection. Run-level serialised inside the creation boundary: exactly
+ * one initial Preparation per feasibility run. A stale/second normal confirm (a
+ * superseded or otherwise non-actionable proposal, an already-resolved run) returns the
+ * EXISTING Preparation with created=false — it never creates a second one. Idempotent
+ * per (tenant, user, proposal). Returns { recommendationId, preparationId, created }.
  */
 export async function confirmProposal(tenantId: string, userId: string, proposalId: string) {
   return createOrGetPreparation(tenantId, userId, {
     idempotencyKey: `proposal:${proposalId}`,
     requestFingerprint: `proposal:${proposalId}`,
-    source: { kind: "feasibility_proposal", proposalId },
+    source: { kind: "feasibility_proposal", proposalId, mode: "normal" },
+  });
+}
+
+/**
+ * EXPLICIT secondary action: "create another preparation from a set-aside alternative".
+ * Distinct intent (key `alt:`) so it never collides with the normal confirm of the same
+ * proposal. Permits a superseded proposal and creates a DISTINCT additional Preparation
+ * through the same stay-bound idempotent boundary; idempotent on retry.
+ */
+export async function createAnotherFromAlternative(
+  tenantId: string,
+  userId: string,
+  proposalId: string,
+) {
+  return createOrGetPreparation(tenantId, userId, {
+    idempotencyKey: `alt:${proposalId}`,
+    requestFingerprint: `alt:${proposalId}`,
+    source: { kind: "feasibility_proposal", proposalId, mode: "alternative" },
   });
 }
 

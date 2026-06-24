@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/devAuth";
 import {
   confirmProposal,
+  createAnotherFromAlternative,
   createStayScopedFallback,
   markProposalNotUseful,
   rejectProposal,
@@ -21,12 +22,25 @@ function revalidate(runId: string, guestId?: string) {
 }
 
 /**
- * One-step, idempotent confirm → creates/returns exactly one Preparation and
- * navigates the host directly to it (no silent disappearance).
+ * NORMAL one-step confirm (first selection). Run-level serialised: creates exactly one
+ * initial Preparation per run, or returns the existing one (stale/second confirm), then
+ * navigates the host to it. Never creates a duplicate from a stale screen.
  */
 export async function confirmProposalAction(runId: string, proposalId: string, guestId?: string) {
   const { tenantId, userId } = await getAuthContext();
   const { preparationId } = await confirmProposal(tenantId, userId, proposalId);
+  revalidate(runId, guestId);
+  redirect(`/dashboard/preparations/${preparationId}`);
+}
+
+/**
+ * EXPLICIT "create another preparation from a set-aside idea" (from a created
+ * Preparation's "Other ideas considered"). Deliberately creates a DISTINCT additional
+ * Preparation through the same stay-bound idempotent boundary.
+ */
+export async function createAnotherPreparationAction(runId: string, proposalId: string, guestId?: string) {
+  const { tenantId, userId } = await getAuthContext();
+  const { preparationId } = await createAnotherFromAlternative(tenantId, userId, proposalId);
   revalidate(runId, guestId);
   redirect(`/dashboard/preparations/${preparationId}`);
 }

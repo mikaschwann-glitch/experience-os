@@ -14,7 +14,6 @@ import {
   type IconName,
   PageHeader,
   SectionTitle,
-  StatCard,
   StatusBadge,
 } from "./_components/ui";
 
@@ -30,15 +29,16 @@ const KIND_LABEL: Record<string, string> = {
 const EVENT_LABEL: Record<string, string> = {
   "guest.created": "Guest added",
   "stay.created": "Stay created",
-  "signal.created": "Signal captured",
+  "signal.created": "Note captured",
   "insight.created": "Insight created",
-  "recommendation.created": "Recommendation created",
-  "recommendation.accepted": "Recommendation approved",
-  "recommendation.dismissed": "Recommendation dismissed",
-  "host_action.created": "Preparation planned",
+  "recommendation.created": "Suggestion created",
+  "recommendation.accepted": "Suggestion approved",
+  "recommendation.dismissed": "Suggestion dismissed",
+  "host_action.created": "Preparation created",
   "host_action.updated": "Preparation updated",
   "outcome.created": "Outcome logged",
   "preparation.created": "Preparation created",
+  "preparation.marked_ready": "Preparation marked ready",
 };
 
 const EVENT_ICON: Record<string, IconName> = {
@@ -53,6 +53,7 @@ const EVENT_ICON: Record<string, IconName> = {
   "host_action.updated": "clipboard",
   "outcome.created": "check",
   "preparation.created": "clipboard",
+  "preparation.marked_ready": "check",
 };
 
 function fmtTime(d: Date | string): string {
@@ -65,10 +66,68 @@ function fmtTime(d: Date | string): string {
   });
 }
 
-function actionableHref(it: PreparationWorkItem): string {
+function daysUntil(stayStart: string): number {
+  const today = new Date();
+  const t0 = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const [y, m, d] = stayStart.split("-").map(Number);
+  const t1 = Date.UTC(y, (m ?? 1) - 1, d ?? 1);
+  return Math.round((t1 - t0) / 86_400_000);
+}
+
+// "By when" the host immediately understands — why this item is urgent.
+function arrivalLabel(stayStart: string): string {
+  const n = daysUntil(stayStart);
+  if (n < 0) return `Stay started · ${stayStart}`;
+  if (n === 0) return "Arriving today";
+  if (n === 1) return "Arrives tomorrow";
+  return `Arrives in ${n} days`;
+}
+
+function itemHref(it: PreparationWorkItem): string {
   if (it.sourceType === "host_action") return `/dashboard/preparations/${it.id}`;
   if (it.runId) return `/dashboard/feasibility/${it.runId}`;
   return `/dashboard/guests/${it.guestId}`;
+}
+
+// One compact row: what · for whom · by when · current state. No long descriptions.
+function PrepRow({ it, last }: { it: PreparationWorkItem; last: boolean }) {
+  return (
+    <Link
+      href={itemHref(it)}
+      className="flex items-center gap-4 px-5 py-4 no-underline transition-colors hover:bg-[#FBF8F1]"
+      style={{ borderBottom: last ? "none" : `1px solid ${C.soft}`, color: C.ink }}
+    >
+      <Avatar name={it.guestName} tone="clay" />
+      <div className="min-w-0 flex-1">
+        <div className="text-[14px] font-medium">{it.title}</div>
+        <div className="mt-0.5 flex items-center gap-1.5 text-[12.5px]" style={{ color: C.muted }}>
+          <Icon name="user" size={13} /> {it.guestName}
+          <span style={{ color: C.stone }}>·</span>
+          <Icon name="calendar" size={13} /> {arrivalLabel(it.stayStart)}
+        </div>
+      </div>
+      <span
+        className="shrink-0 rounded-full px-2.5 py-1 text-[11.5px] font-medium"
+        style={{ background: C.paper, color: C.muted }}
+      >
+        {KIND_LABEL[it.kind]}
+      </span>
+    </Link>
+  );
+}
+
+function PrioritySection({ title, items }: { title: string; items: PreparationWorkItem[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="mt-7 first:mt-0">
+      <SectionTitle>{title}</SectionTitle>
+      <Card className="mt-3 overflow-hidden">
+        {items.map((it, i, arr) => (
+          <PrepRow key={it.sourceType + it.id} it={it} last={i === arr.length - 1} />
+        ))}
+      </Card>
+    </div>
+  );
 }
 
 export default async function TodayPage() {
@@ -78,17 +137,21 @@ export default async function TodayPage() {
     listPreparationWorkItems(tenantId),
   ]);
   const firstName = userName.split(" ")[0];
-  // Badge = actionable PreparationWorkItems ONLY. Arrivals/departures are context
-  // and never inflate the count.
+
+  // Badge = actionable PreparationWorkItems ONLY (arrivals are context, never counted).
   const actionable = workItems.filter((i) => i.actionable);
   const needsAttention = actionable.length;
 
+  // Priority split. Committed work (planned) is ordered by arrival; the nearest few are
+  // "Do first", the rest "Coming up". Pending decisions are "Suggestions to review".
+  const planned = actionable.filter((i) => i.kind === "planned"); // already arrival-sorted
+  const suggestions = actionable.filter((i) => i.kind === "suggested");
+  const doFirst = planned.slice(0, 5);
+  const comingUp = planned.slice(5);
+
   return (
     <div>
-      <PageHeader
-        title={`Good morning, ${firstName}`}
-        subtitle="What needs your attention for guests today."
-      />
+      <PageHeader title={`Good morning, ${firstName}`} subtitle="What needs your attention first." />
 
       {needsAttention > 0 ? (
         <Link href="/dashboard/preparations" className="mt-5 block no-underline">
@@ -103,61 +166,25 @@ export default async function TodayPage() {
               Needs attention: {needsAttention} preparation{needsAttention > 1 ? "s" : ""}
             </span>
             <span className="ml-auto flex items-center gap-1 text-[13px] font-medium" style={{ color: C.clayDark }}>
-              Open <Icon name="arrowRight" size={15} />
+              Open all <Icon name="arrowRight" size={15} />
             </span>
           </div>
         </Link>
       ) : null}
 
-      <div className="mt-6 grid grid-cols-3 gap-4">
-        <StatCard icon="user" value={snapshot.counts.arrivingToday} label="Arriving today" />
-        <StatCard icon="bed" value={snapshot.counts.inResidence} label="In residence" />
-        <StatCard
-          icon="clipboard"
-          value={needsAttention}
-          label="Needs attention"
-          alert={needsAttention > 0}
-          href="/dashboard/preparations"
-        />
-      </div>
-
       <div className="mt-8 grid grid-cols-1 gap-7 lg:grid-cols-[1fr_330px]">
         <div>
-          <SectionTitle>Needs attention</SectionTitle>
-          <Card className="mt-3 overflow-hidden">
-            {actionable.length === 0 ? (
-              <EmptyState>Nothing needs your decision right now.</EmptyState>
-            ) : (
-              actionable.map((it, i, arr) => (
-                <Link
-                  key={it.sourceType + it.id}
-                  href={actionableHref(it)}
-                  className="flex items-center gap-4 px-5 py-4 no-underline transition-colors hover:bg-[#FBF8F1]"
-                  style={{
-                    borderBottom: i === arr.length - 1 ? "none" : `1px solid ${C.soft}`,
-                    color: C.ink,
-                  }}
-                >
-                  <Avatar name={it.guestName} tone="clay" />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[14px] font-medium">{it.title}</div>
-                    <div className="mt-0.5 flex items-center gap-1.5 text-[12.5px]" style={{ color: C.muted }}>
-                      <Icon name="user" size={13} /> {it.guestName}
-                      <span style={{ color: C.stone }}>·</span>
-                      <Icon name="calendar" size={13} /> Before arrival · {it.stayStart}
-                    </div>
-                  </div>
-                  <span
-                    className="rounded-full px-2.5 py-1 text-[11.5px] font-medium"
-                    style={{ background: C.paper, color: C.muted }}
-                  >
-                    {KIND_LABEL[it.kind]}
-                  </span>
-                </Link>
-              ))
-            )}
-          </Card>
+          {needsAttention === 0 ? (
+            <Card className="overflow-hidden">
+              <EmptyState>Nothing needs your attention right now.</EmptyState>
+            </Card>
+          ) : null}
 
+          <PrioritySection title="Do first" items={doFirst} />
+          <PrioritySection title="Coming up" items={comingUp} />
+          <PrioritySection title="Suggestions to review" items={suggestions} />
+
+          {/* Context only — arrivals never inflate the attention count. */}
           <div className="mt-7">
             <SectionTitle>Arrivals &amp; departures</SectionTitle>
             <Card className="mt-3 overflow-hidden">

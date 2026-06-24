@@ -32,17 +32,25 @@ function PrepRow({ item, last }: { item: PreparationWorkItem; last: boolean }) {
     >
       <div className="min-w-0 flex-1">
         <div className="text-[14px] font-medium">{item.title}</div>
-        <div className="mt-0.5 flex items-center gap-1.5 text-[12.5px]" style={{ color: C.muted }}>
-          <Icon name="user" size={13} /> {item.guestName}
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12.5px]" style={{ color: C.muted }}>
+          <span className="flex items-center gap-1">
+            <Icon name="user" size={13} /> {item.guestName}
+          </span>
           <span style={{ color: C.stone }}>·</span>
-          <Icon name="calendar" size={13} />{" "}
-          {item.dueAt
-            ? new Date(item.dueAt).toLocaleDateString("en-GB")
-            : `Before arrival · ${item.stayStart}`}
+          <span className="flex items-center gap-1">
+            <Icon name="bed" size={13} /> {item.unitName ?? "Home TBD"}
+          </span>
+          <span style={{ color: C.stone }}>·</span>
+          <span className="flex items-center gap-1">
+            <Icon name="calendar" size={13} />{" "}
+            {item.dueAt
+              ? new Date(item.dueAt).toLocaleDateString("en-GB")
+              : `Before arrival · ${item.stayStart}`}
+          </span>
         </div>
       </div>
       <span
-        className="rounded-full px-2.5 py-1 text-[11.5px] font-medium"
+        className="shrink-0 rounded-full px-2.5 py-1 text-[11.5px] font-medium"
         style={{ background: C.paper, color: C.muted }}
       >
         {KIND_LABEL[item.kind]}
@@ -75,17 +83,17 @@ export default async function PreparationsPage() {
   const items = await listPreparationWorkItems(tenantId);
   const suggested = items.filter((i) => i.kind === "suggested");
   const active = items.filter((i) => i.kind === "planned");
-  const past = items.filter((i) => i.kind === "completed" || i.kind === "cancelled");
+  const completed = items.filter((i) => i.kind === "completed");
 
   return (
     <div>
       <PageHeader
         title="Preparations"
-        subtitle="Every stay-bound guest preparation — suggested, active, and past."
+        subtitle="Every guest preparation — what needs preparing, what is active, and what is complete."
       />
       <PrepSection title="Suggested" items={suggested} />
       <PrepSection title="Active" items={active} />
-      <PrepSection title="Past" items={past} />
+      <PrepSection title="Completed" items={completed} />
     </div>
   );
 }

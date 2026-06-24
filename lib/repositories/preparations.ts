@@ -1,5 +1,5 @@
 import { randomUUID, createHash } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq, inArray, ne } from "drizzle-orm";
 import { getDb, type Executor } from "@/db/client";
 import {
   feasibilityProposals,
@@ -50,9 +50,23 @@ export interface PreparationResult {
   created: boolean;
 }
 
+// Two explicit feasibility intents (never one broad path):
+//  - "normal"      = the FIRST selection for a guest need. Run-level serialised: exactly
+//                    one initial Preparation per run; a stale/second normal confirm
+//                    returns the existing one (no duplicate).
+//  - "alternative" = the DELIBERATE secondary "create another from a set-aside idea"
+//                    action: permits a superseded proposal and creates a DISTINCT prep.
 export type PreparationSource =
-  | { kind: "feasibility_proposal"; proposalId: string }
+  | { kind: "feasibility_proposal"; proposalId: string; mode: "normal" | "alternative" }
   | { kind: "fallback"; runId: string; title: string; description?: string | null };
+
+type MaterialiseResult = {
+  recommendationId: string;
+  preparationId: string;
+  stayId: string;
+  /** True only when a NEW Preparation was actually created (false on a resolved return). */
+  created: boolean;
+};
 
 /** Deterministic fingerprint of a host-authored fallback submission. */
 export function fingerprintFallback(runId: string, title: string, description?: string | null): string {
@@ -141,16 +155,21 @@ export async function createOrGetPreparation(
       })
       .where(and(eq(preparationIntents.tenantId, tenantId), eq(preparationIntents.id, intentId)));
 
-    await emitEvent(tx, {
-      tenantId,
-      actorUserId: userId,
-      type: "preparation.created",
-      entityType: "host_action",
-      entityId: out.preparationId,
-      payload: { recommendationId: out.recommendationId, stayId: out.stayId, source: input.source.kind },
-    });
+    // Emit "preparation.created" ONLY when a new Preparation was actually created — a
+    // resolved return (e.g. a stale normal confirm of an already-resolved run) creates
+    // nothing and must not fabricate a creation event.
+    if (out.created) {
+      await emitEvent(tx, {
+        tenantId,
+        actorUserId: userId,
+        type: "preparation.created",
+        entityType: "host_action",
+        entityId: out.preparationId,
+        payload: { recommendationId: out.recommendationId, stayId: out.stayId, source: input.source.kind },
+      });
+    }
 
-    return { recommendationId: out.recommendationId, preparationId: out.preparationId, created: true };
+    return { recommendationId: out.recommendationId, preparationId: out.preparationId, created: out.created };
   });
 }
 
@@ -159,24 +178,110 @@ async function materialise(
   tenantId: string,
   userId: string,
   source: PreparationSource,
-): Promise<{ recommendationId: string; preparationId: string; stayId: string }> {
+): Promise<MaterialiseResult> {
   if (source.kind === "feasibility_proposal") {
-    return materialiseFromProposal(tx, tenantId, userId, source.proposalId);
+    return materialiseFromProposal(tx, tenantId, userId, source.proposalId, source.mode);
   }
   return materialiseFallback(tx, tenantId, userId, source);
 }
 
 /**
- * Feasibility-originated: accept + convert a proposal into EXACTLY ONE recommendation
- * and ONE host_action. Preserves the proposal row-lock; provenance is copied from the
- * run; the stay is the run's validated stay.
+ * Feasibility-originated creation.
+ *
+ * Concurrency model:
+ *  - mode "normal": RUN-LEVEL SERIALISATION. We lock the feasibility_run row FOR UPDATE
+ *    BEFORE locking the chosen proposal, so two concurrent normal confirms of DIFFERENT
+ *    siblings order here. The first creates exactly one Preparation and supersedes the
+ *    rest; the second sees the run already resolved and RETURNS THE EXISTING Preparation
+ *    (created=false) — no duplicate initial work, even from a stale screen or old link.
+ *    Locking the run before any proposal also avoids a deadlock with the sibling-supersede
+ *    UPDATE (the blocked transaction holds no proposal lock).
+ *  - mode "alternative": the deliberate "create another from a set-aside idea" action.
+ *    Permits a 'superseded' proposal and creates a DISTINCT additional Preparation;
+ *    idempotent if that alternative was already turned into a Preparation.
  */
 async function materialiseFromProposal(
   tx: Executor,
   tenantId: string,
   userId: string,
   proposalId: string,
-): Promise<{ recommendationId: string; preparationId: string; stayId: string }> {
+  mode: "normal" | "alternative",
+): Promise<MaterialiseResult> {
+  // Find the run without locking the proposal yet (lock ordering is run -> proposal).
+  const [p0] = await tx
+    .select({ runId: feasibilityProposals.runId })
+    .from(feasibilityProposals)
+    .where(and(eq(feasibilityProposals.tenantId, tenantId), eq(feasibilityProposals.id, proposalId)))
+    .limit(1);
+  if (!p0) throw new Error("Proposal not found for this tenant.");
+
+  // Lock the run row. For a normal first selection this is THE serialisation point.
+  const [run] = await tx
+    .select({
+      id: feasibilityRuns.id,
+      stayId: feasibilityRuns.stayId,
+      triggerSource: feasibilityRuns.triggerSource,
+      externallyResearched: feasibilityRuns.externallyResearched,
+    })
+    .from(feasibilityRuns)
+    .where(and(eq(feasibilityRuns.tenantId, tenantId), eq(feasibilityRuns.id, p0.runId)))
+    .for("update")
+    .limit(1);
+  if (!run?.stayId) {
+    throw new Error("Cannot confirm: the feasibility run has no stay to bind the preparation to.");
+  }
+
+  // Is this run already resolved (a proposal already converted into a Preparation)?
+  const [already] = await tx
+    .select({ recommendationId: feasibilityProposals.recommendationId })
+    .from(feasibilityProposals)
+    .where(
+      and(
+        eq(feasibilityProposals.tenantId, tenantId),
+        eq(feasibilityProposals.runId, run.id),
+        eq(feasibilityProposals.status, "converted_to_host_action"),
+      ),
+    )
+    .orderBy(asc(feasibilityProposals.createdAt))
+    .limit(1);
+
+  async function existingFor(recommendationId: string): Promise<MaterialiseResult | null> {
+    const [ha] = await tx
+      .select({ id: hostActions.id })
+      .from(hostActions)
+      .where(and(eq(hostActions.tenantId, tenantId), eq(hostActions.recommendationId, recommendationId)))
+      .limit(1);
+    return ha ? { recommendationId, preparationId: ha.id, stayId: run!.stayId as string, created: false } : null;
+  }
+
+  if (mode === "normal") {
+    // Stale / second normal confirm of an already-resolved run → return the existing
+    // initial Preparation. Never creates a second one.
+    if (already?.recommendationId) {
+      const existing = await existingFor(already.recommendationId);
+      if (existing) return existing;
+    }
+    // First selection: lock the chosen proposal and require it still be ACTIONABLE.
+    const [p] = await tx
+      .select()
+      .from(feasibilityProposals)
+      .where(and(eq(feasibilityProposals.tenantId, tenantId), eq(feasibilityProposals.id, proposalId)))
+      .for("update")
+      .limit(1);
+    if (!p) throw new Error("Proposal not found for this tenant.");
+    if (p.status !== "proposed" && p.status !== "requires_confirmation") {
+      // Not an actionable first-selection (superseded/converted/withheld/etc.). A normal
+      // confirm must not create a second Preparation; surface the resolved one if any.
+      if (already?.recommendationId) {
+        const existing = await existingFor(already.recommendationId);
+        if (existing) return existing;
+      }
+      throw new Error("This proposal can no longer be selected as a first preparation.");
+    }
+    return convertAndSupersede(tx, tenantId, userId, p, run);
+  }
+
+  // mode === "alternative": deliberate secondary creation from a set-aside idea.
   const [p] = await tx
     .select()
     .from(feasibilityProposals)
@@ -184,24 +289,30 @@ async function materialiseFromProposal(
     .for("update")
     .limit(1);
   if (!p) throw new Error("Proposal not found for this tenant.");
-  if (p.status === "withheld" || p.status === "rejected" || p.status === "not_useful") {
-    throw new Error("This proposal cannot be confirmed.");
+  if (p.status === "converted_to_host_action" && p.recommendationId) {
+    const existing = await existingFor(p.recommendationId);
+    if (existing) return existing; // idempotent: this alternative already became a prep
   }
-
-  const [run] = await tx
-    .select({
-      stayId: feasibilityRuns.stayId,
-      triggerSource: feasibilityRuns.triggerSource,
-      externallyResearched: feasibilityRuns.externallyResearched,
-    })
-    .from(feasibilityRuns)
-    .where(and(eq(feasibilityRuns.tenantId, tenantId), eq(feasibilityRuns.id, p.runId)))
-    .limit(1);
-  if (!run?.stayId) {
-    throw new Error("Cannot confirm: the feasibility run has no stay to bind the preparation to.");
+  if (p.status !== "superseded" && p.status !== "converted_to_host_action") {
+    throw new Error("Only a set-aside alternative can be turned into another preparation.");
   }
+  return convertAndSupersede(tx, tenantId, userId, p, run);
+}
 
-  // Exactly one recommendation (copy provenance explicitly from the run).
+/**
+ * Convert one proposal into EXACTLY ONE recommendation + ONE host_action (idempotent,
+ * DB-backed by the partial-unique index on recommendation_id), then set the proposal
+ * 'converted' and supersede the run's remaining actionable siblings. Provenance is copied
+ * from the run; the stay is the run's validated stay. Returns created=true.
+ */
+async function convertAndSupersede(
+  tx: Executor,
+  tenantId: string,
+  userId: string,
+  p: typeof feasibilityProposals.$inferSelect,
+  run: { id: string; stayId: string | null; triggerSource: string | null; externallyResearched: boolean | null },
+): Promise<MaterialiseResult> {
+  const stayId = run.stayId as string;
   let recommendationId = p.recommendationId;
   if (!recommendationId) {
     const correlationId = randomUUID();
@@ -210,14 +321,14 @@ async function materialiseFromProposal(
       .values({
         tenantId,
         guestId: p.guestId,
-        stayId: run.stayId,
+        stayId,
         title: p.title,
         description: p.description,
         rationale: p.rationale,
         effort: p.hostEffort ?? "low",
         status: "accepted",
         generatedBy: "rules",
-        triggerSource: run.triggerSource ?? null,
+        triggerSource: (run.triggerSource as "guest_stated" | "host_noted" | null) ?? null,
         externallyResearched: run.externallyResearched ?? false,
         correlationId,
       })
@@ -226,7 +337,7 @@ async function materialiseFromProposal(
     await tx
       .update(feasibilityProposals)
       .set({ recommendationId, updatedAt: new Date() })
-      .where(and(eq(feasibilityProposals.tenantId, tenantId), eq(feasibilityProposals.id, proposalId)));
+      .where(and(eq(feasibilityProposals.tenantId, tenantId), eq(feasibilityProposals.id, p.id)));
     await emitEvent(tx, {
       tenantId,
       actorUserId: userId,
@@ -241,13 +352,11 @@ async function materialiseFromProposal(
       actorUserId: userId,
       type: "feasibility.proposal_accepted",
       entityType: "feasibility_proposal",
-      entityId: proposalId,
+      entityId: p.id,
       payload: { recommendationId: rec.id },
     });
   }
 
-  // Exactly one host_action for that recommendation (idempotent; DB-backed by the
-  // partial-unique index on recommendation_id).
   const [existingHa] = await tx
     .select({ id: hostActions.id })
     .from(hostActions)
@@ -271,18 +380,44 @@ async function materialiseFromProposal(
     await tx
       .update(feasibilityProposals)
       .set({ status: "converted_to_host_action", updatedAt: new Date() })
-      .where(and(eq(feasibilityProposals.tenantId, tenantId), eq(feasibilityProposals.id, proposalId)));
+      .where(and(eq(feasibilityProposals.tenantId, tenantId), eq(feasibilityProposals.id, p.id)));
     await emitEvent(tx, {
       tenantId,
       actorUserId: userId,
       type: "feasibility.proposal_converted",
       entityType: "feasibility_proposal",
-      entityId: proposalId,
+      entityId: p.id,
       payload: { recommendationId },
     });
+
+    // The chosen proposal answers ONE guest need; the run's remaining actionable siblings
+    // are alternatives, not separate tasks — set them aside (auditable, non-actionable).
+    // Never deletes / rejects them, never touches another run.
+    const setAside = await tx
+      .update(feasibilityProposals)
+      .set({ status: "superseded", updatedAt: new Date() })
+      .where(
+        and(
+          eq(feasibilityProposals.tenantId, tenantId),
+          eq(feasibilityProposals.runId, p.runId),
+          ne(feasibilityProposals.id, p.id),
+          inArray(feasibilityProposals.status, ["proposed", "requires_confirmation"]),
+        ),
+      )
+      .returning({ id: feasibilityProposals.id });
+    if (setAside.length > 0) {
+      await emitEvent(tx, {
+        tenantId,
+        actorUserId: userId,
+        type: "feasibility.siblings_superseded",
+        entityType: "feasibility_run",
+        entityId: p.runId,
+        payload: { chosenProposalId: p.id, supersededCount: setAside.length },
+      });
+    }
   }
 
-  return { recommendationId, preparationId, stayId: run.stayId };
+  return { recommendationId, preparationId, stayId, created: true };
 }
 
 /**
@@ -295,7 +430,7 @@ async function materialiseFallback(
   tenantId: string,
   userId: string,
   source: { runId: string; title: string; description?: string | null },
-): Promise<{ recommendationId: string; preparationId: string; stayId: string }> {
+): Promise<MaterialiseResult> {
   const title = source.title.trim();
   if (!title) throw new Error("A preparation is required.");
 
@@ -349,5 +484,5 @@ async function materialiseFallback(
     { title, description: source.description ?? null },
     tx,
   );
-  return { recommendationId: rec.id, preparationId: action.id, stayId: run.stayId };
+  return { recommendationId: rec.id, preparationId: action.id, stayId: run.stayId, created: true };
 }

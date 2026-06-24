@@ -20,6 +20,12 @@ export type DomainEventType =
   // Wave 1A — the single transactional creation boundary committed exactly one
   // Preparation (host_action) for a stay, idempotently.
   | "preparation.created"
+  // Wave 2 — the host marked a Preparation physically ready (planned -> prepared),
+  // capturing an immutable execution snapshot. Distinct from an outcome.
+  | "preparation.marked_ready"
+  // Wave 2 — lightweight, PII-light audit of deterministic free-text -> concept
+  // mapping quality (matched vs. fell back to clarification/custom). No guest text.
+  | "concept_mapping.evaluated"
   // Wave 2A — Pre-Arrival Intelligence Simulation Lab lifecycle (additive; PII-light payloads).
   | "consent.granted"
   | "consent.withdrawn"
@@ -50,6 +56,9 @@ export type DomainEventType =
   | "feasibility.proposal_rejected"
   | "feasibility.proposal_not_useful"
   | "feasibility.proposal_converted"
+  // Wave 2 completion — sibling proposals from the same run set aside after the host
+  // chose one (auditable; non-actionable). PII-light: ids + count only.
+  | "feasibility.siblings_superseded"
   // Wave 2D — Outcome → Property Learning Loop (additive; PII-light: ids/type
   // only, never the host's free-text note).
   | "learning.draft_created"

@@ -9,16 +9,15 @@ import { C, Icon, type IconName } from "./ui";
  * (no decorative-only items). Active state uses a translucent fill + clay inset
  * accent bar, matching the frozen design direction.
  */
-// Wave 1B IA: three durable work surfaces (Today / Guests / Preparations) + the
-// property-knowledge store (Our Place). Recommendations and Research Lab are NOT
-// primary host destinations (provenance / simulation surfaces) — their routes still
-// exist but are reached contextually, not from the rail. Properties is admin/setup.
+// Wave 2 IA: exactly four primary host surfaces. Today / Guests / Preparations are the
+// durable work + recovery surfaces; Our Place is the property-knowledge store. Properties
+// is NOT a separate primary destination — it lives under Our Place as a sub-area.
+// Recommendations / Research Lab / Feasibility remain as routes but are never on the rail.
 const NAV: { label: string; href: string; icon: IconName }[] = [
   { label: "Today", href: "/dashboard", icon: "today" },
   { label: "Guests", href: "/dashboard/guests", icon: "guests" },
   { label: "Preparations", href: "/dashboard/preparations", icon: "clipboard" },
   { label: "Our Place", href: "/dashboard/property-intelligence", icon: "note" },
-  { label: "Properties", href: "/dashboard/properties", icon: "properties" },
 ];
 
 export function SidebarNav({

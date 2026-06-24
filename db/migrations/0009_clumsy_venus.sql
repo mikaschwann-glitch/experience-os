@@ -1,0 +1,1 @@
+ALTER TYPE "public"."feasibility_proposal_status" ADD VALUE 'superseded';

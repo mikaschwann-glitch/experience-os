@@ -42,8 +42,12 @@ export const recommendationStatusEnum = pgEnum("recommendation_status", [
   "accepted",
   "dismissed",
 ]);
+// Wave 2 lifecycle: 'prepared' = the host physically prepared the item ("Mark as
+// ready"), HONESTLY distinct from an outcome. 'done' is the legacy combined state
+// (an outcome was logged). Both 'prepared' and 'done' surface to the host as "Completed".
 export const hostActionStatusEnum = pgEnum("host_action_status", [
   "planned",
+  "prepared",
   "done",
   "cancelled",
 ]);
@@ -378,6 +382,11 @@ export const outcomes = pgTable(
     hostActionId: uuid("host_action_id").references(() => hostActions.id, {
       onDelete: "set null",
     }),
+    // Wave 2 — the exact execution version this outcome refers to (frozen rule: an
+    // outcome binds to the immutable snapshot of what was prepared, not the live row).
+    executionId: uuid("execution_id").references(() => preparationExecutions.id, {
+      onDelete: "set null",
+    }),
     guestId: uuid("guest_id")
       .notNull()
       .references(() => guests.id, { onDelete: "cascade" }),
@@ -391,6 +400,32 @@ export const outcomes = pgTable(
   (t) => [
     index("outcomes_tenant_idx").on(t.tenantId),
     index("outcomes_guest_idx").on(t.guestId),
+  ],
+);
+
+// Wave 2 — immutable execution snapshot. Written when a host marks a Preparation
+// "ready" (planned -> prepared): captures WHAT was prepared at that moment so a later
+// edit can never rewrite what an outcome refers to. Append-only (never updated).
+export const preparationExecutions = pgTable(
+  "preparation_executions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: tenantCol(),
+    hostActionId: uuid("host_action_id")
+      .notNull()
+      .references(() => hostActions.id, { onDelete: "cascade" }),
+    version: integer("version").notNull().default(1),
+    // { title, description, rationale, stayId, guestId, recommendationId }
+    snapshot: jsonb("snapshot").notNull().default({}),
+    preparedByUserId: uuid("prepared_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    preparedAt: timestamp("prepared_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("preparation_executions_tenant_idx").on(t.tenantId),
+    uniqueIndex("preparation_executions_action_version_uq").on(t.hostActionId, t.version),
   ],
 );
 

@@ -33,6 +33,7 @@ import {
 import { emitEvent } from "@/lib/events/events";
 import { overlap, sanitizeTags, tagLabel } from "@/lib/domain/vocabulary";
 import { resolveSimContext, type SimContext } from "@/lib/feasibility/context";
+import { rankProposals } from "@/lib/feasibility/ranking";
 
 const MAX_ACTIONABLE = 3;
 
@@ -273,11 +274,17 @@ async function runFeasibilityCore(input: {
     });
   }
 
-  // ---- Rank: actionable (proposed before requires_confirmation), cap at 3; keep all withheld ----
-  const rank = (d: Draft) => (d.status === "proposed" ? 0 : d.status === "requires_confirmation" ? 1 : 2);
-  const actionable = drafts.filter((d) => d.status !== "withheld").sort((a, b) => rank(a) - rank(b)).slice(0, MAX_ACTIONABLE);
+  // ---- Rank deterministically (lib/feasibility/ranking), cap at 3; keep all withheld ----
+  const { ranked } = rankProposals(drafts.filter((d) => d.status !== "withheld"));
+  const actionable = ranked.slice(0, MAX_ACTIONABLE);
   const withheld = drafts.filter((d) => d.status === "withheld");
   const kept = [...actionable, ...withheld];
+  // Persisted priority = the deterministic display order (actionable first by rank,
+  // withheld last) so getFeasibilityRun returns a stable, policy-consistent order.
+  const priorityOf = (d: Draft) => {
+    const i = actionable.indexOf(d);
+    return i >= 0 ? i : MAX_ACTIONABLE + withheld.indexOf(d);
+  };
 
   const runId = await db.transaction(async (tx) => {
     const [run] = await tx
@@ -316,7 +323,7 @@ async function runFeasibilityCore(input: {
           withheldReason: d.withheldReason,
           confirmationRequired: d.confirmationRequired,
           freshness: d.freshness,
-          priority: rank(d),
+          priority: priorityOf(d),
           leadTime: d.leadTime,
           hostEffort: d.hostEffort,
           costLevel: d.costLevel,

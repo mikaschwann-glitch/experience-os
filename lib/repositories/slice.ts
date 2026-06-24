@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { getDb, type Executor } from "@/db/client";
 import {
   hostActions,
   insights,
   outcomes,
+  preparationExecutions,
   recommendationInsights,
   recommendations,
   signals,
@@ -272,6 +273,89 @@ export async function createHostAction(
   });
 }
 
+/**
+ * Wave 2 — "Mark as ready": the host physically prepared the item.
+ * Transition planned -> prepared and write ONE immutable execution snapshot of what
+ * was prepared (frozen rule: a later edit can never rewrite what an outcome refers to).
+ * Idempotent: already-prepared / already-done returns without a second snapshot.
+ * A cancelled Preparation cannot be marked ready. 'prepared' is HONESTLY distinct from
+ * an outcome — it never asserts how the stay went.
+ */
+export async function markPrepared(
+  tenantId: string,
+  userId: string,
+  preparationId: string,
+  tx?: Executor,
+): Promise<{ preparationId: string; executionId: string | null; created: boolean }> {
+  return run(tx, async (db) => {
+    // Lock the row so concurrent "Mark as ready" clicks can't both write a snapshot.
+    const [action] = await db
+      .select()
+      .from(hostActions)
+      .where(and(eq(hostActions.tenantId, tenantId), eq(hostActions.id, preparationId)))
+      .for("update")
+      .limit(1);
+    if (!action) throw new Error("Preparation not found for tenant.");
+    if (action.status === "prepared" || action.status === "done") {
+      return { preparationId, executionId: null, created: false };
+    }
+    if (action.status === "cancelled") {
+      throw new Error("A cancelled preparation cannot be marked ready.");
+    }
+
+    // Best-effort rationale from the provenance recommendation (for the snapshot only).
+    let rationale: string | null = null;
+    if (action.recommendationId) {
+      const [rec] = await db
+        .select({ rationale: recommendations.rationale })
+        .from(recommendations)
+        .where(
+          and(
+            eq(recommendations.tenantId, tenantId),
+            eq(recommendations.id, action.recommendationId),
+          ),
+        )
+        .limit(1);
+      rationale = rec?.rationale ?? null;
+    }
+
+    await db
+      .update(hostActions)
+      .set({ status: "prepared", updatedAt: new Date() })
+      .where(and(eq(hostActions.tenantId, tenantId), eq(hostActions.id, preparationId)));
+
+    const [execution] = await db
+      .insert(preparationExecutions)
+      .values({
+        tenantId,
+        hostActionId: action.id,
+        version: 1,
+        preparedByUserId: userId,
+        snapshot: {
+          title: action.title,
+          description: action.description,
+          rationale,
+          stayId: action.stayId,
+          guestId: action.guestId,
+          recommendationId: action.recommendationId,
+        },
+      })
+      .returning();
+
+    await emitEvent(db, {
+      tenantId,
+      actorUserId: userId,
+      type: "preparation.marked_ready",
+      entityType: "host_action",
+      entityId: action.id,
+      correlationId: action.correlationId,
+      payload: { executionId: execution.id, stayId: action.stayId, version: 1 },
+    });
+
+    return { preparationId, executionId: execution.id, created: true };
+  });
+}
+
 export async function logOutcome(
   tenantId: string,
   userId: string,
@@ -292,11 +376,25 @@ export async function logOutcome(
       .limit(1);
     if (!action) throw new Error("Host action not found for tenant.");
 
+    // Frozen rule: bind the outcome to the exact prepared snapshot, when one exists.
+    const [execution] = await tx
+      .select({ id: preparationExecutions.id })
+      .from(preparationExecutions)
+      .where(
+        and(
+          eq(preparationExecutions.tenantId, tenantId),
+          eq(preparationExecutions.hostActionId, action.id),
+        ),
+      )
+      .orderBy(desc(preparationExecutions.version))
+      .limit(1);
+
     const [outcome] = await tx
       .insert(outcomes)
       .values({
         tenantId,
         hostActionId: action.id,
+        executionId: execution?.id ?? null,
         guestId: action.guestId,
         result: input.result,
         notes: input.notes ?? null,

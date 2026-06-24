@@ -14,6 +14,8 @@ import {
 } from "@/lib/repositories/slice";
 import { evaluateFirstPartyFeasibility } from "@/lib/feasibility/engine";
 import { captureLearning, type LearningType } from "@/lib/repositories/learning";
+import { logConceptMapping, mapTextToConcepts } from "@/lib/domain/conceptMapping";
+import { sanitizeTags } from "@/lib/domain/vocabulary";
 
 /**
  * Server actions for the manual vertical slice. Each one resolves tenant/user
@@ -106,22 +108,22 @@ export async function captureLearningAction(
 }
 
 /**
- * Wave 2D.1 — Reactive first-party slice. A host note / guest request within a
- * SPECIFIC stay → existing capability/constraint/withholding engine → feasibility
- * run. Tenant/guest/stay/property are resolved + checked server-side; the free-text
- * note is stored as the source signal (never classified, never sent to an LLM).
- * Topics are host-selected canonical tags only. No external research, no consent gate.
+ * Wave 2 — "Prepare for this stay". The host writes plain English describing what
+ * would help the guest; we map it DETERMINISTICALLY to canonical concepts (no LLM,
+ * no taxonomy grid) and run the existing grounded matcher. Tenant/guest/stay/property
+ * are resolved + checked server-side; the free text is stored as the source signal
+ * (never classified, never sent to an LLM). No external research, no consent gate.
  */
 export async function planPreparationAction(guestId: string, formData: FormData) {
   const { tenantId, userId } = await getAuthContext();
   const stayId = String(formData.get("stayId") ?? "").trim();
   if (!stayId) return;
-  const topics = formData.getAll("topics").map(String);
   const triggerSource =
     String(formData.get("triggerSource") ?? "host_noted") === "guest_stated"
       ? "guest_stated"
       : "host_noted";
   const note = String(formData.get("note") ?? "").trim();
+  if (!note) return;
 
   // Reject cross-tenant / mismatched guest·stay·property before recording anything.
   const db = getDb();
@@ -133,17 +135,56 @@ export async function planPreparationAction(guestId: string, formData: FormData)
   if (!stay || stay.guestId !== guestId || !stay.propertyId) return;
 
   // Store the host note / guest request as the source signal (first-party, unparsed).
-  let sourceSignalId: string | null = null;
-  if (note) {
-    const sig = await createSignal(tenantId, userId, { guestId, stayId, body: note });
-    sourceSignalId = sig.id;
-  }
+  const sig = await createSignal(tenantId, userId, { guestId, stayId, body: note });
+
+  // Deterministic free text -> canonical concepts. We NEVER invent a recommendation:
+  // an empty mapping yields a withholding run, where the host gets grounded directions
+  // or an immediate custom preparation. PII-light: only concept ids / outcome logged.
+  const { concepts, confident } = mapTextToConcepts(note);
+  await logConceptMapping(tenantId, userId, {
+    stayId,
+    concepts,
+    outcome: confident ? "matched" : "needs_clarification",
+  });
 
   const result = await evaluateFirstPartyFeasibility(tenantId, userId, {
     stayId,
-    topics,
+    topics: concepts,
     triggerSource,
-    sourceSignalId,
+    sourceSignalId: sig.id,
+    guestId,
+  });
+  redirect(`/dashboard/feasibility/${result.runId}`);
+}
+
+/**
+ * Wave 2 — pick a grounded clarification direction. Re-runs the matcher for the SAME
+ * stay with the chosen bucket's canonical concepts (sanitised server-side). Used when
+ * the first attempt withheld and the host nudges toward what the property can support.
+ */
+export async function refinePreparationAction(
+  guestId: string,
+  stayId: string,
+  conceptsCsv: string,
+) {
+  const { tenantId, userId } = await getAuthContext();
+  const concepts = sanitizeTags(conceptsCsv.split(","));
+  if (concepts.length === 0) return;
+
+  const db = getDb();
+  const [stay] = await db
+    .select({ id: stays.id, guestId: stays.guestId, propertyId: stays.propertyId })
+    .from(stays)
+    .where(and(eq(stays.tenantId, tenantId), eq(stays.id, stayId)))
+    .limit(1);
+  if (!stay || stay.guestId !== guestId || !stay.propertyId) return;
+
+  await logConceptMapping(tenantId, userId, { stayId, concepts, outcome: "matched" });
+  const result = await evaluateFirstPartyFeasibility(tenantId, userId, {
+    stayId,
+    topics: concepts,
+    triggerSource: "host_noted",
+    sourceSignalId: null,
     guestId,
   });
   redirect(`/dashboard/feasibility/${result.runId}`);

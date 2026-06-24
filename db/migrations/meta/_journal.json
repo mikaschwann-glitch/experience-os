@@ -57,6 +57,20 @@
       "when": 1782295710459,
       "tag": "0007_nervous_puff_adder",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1782301650101,
+      "tag": "0008_safe_blink",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1782307243085,
+      "tag": "0009_clumsy_venus",
+      "breakpoints": true
     }
   ]
 }

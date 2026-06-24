@@ -45,6 +45,10 @@ export const feasibilityProposalStatusEnum = pgEnum("feasibility_proposal_status
   "rejected",
   "not_useful",
   "converted_to_host_action",
+  // Wave 2 completion: a SIBLING alternative from the same run, set aside because the
+  // host chose another proposal for this one guest need. NOT rejected / not_useful /
+  // deleted — auditable, non-actionable, shown only under "Other ideas considered".
+  "superseded",
 ]);
 
 const timestamps = {

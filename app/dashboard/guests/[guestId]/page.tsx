@@ -12,7 +12,6 @@ import {
   Field,
   Icon,
   type IconName,
-  RationaleNote,
   SectionTitle,
   Select,
   SensitiveNote,
@@ -22,10 +21,6 @@ import {
   TextInput,
 } from "../../_components/ui";
 import {
-  acceptRecommendationAction,
-  createInsightAction,
-  createSignalAction,
-  dismissRecommendationAction,
   logOutcomeAction,
   captureLearningAction,
   planPreparationAction,
@@ -38,19 +33,30 @@ const LEARNING_TYPE_LABEL: Record<string, string> = {
   playbook: "Preparation playbook action",
 };
 
+// Host-facing preparation state. 'prepared' (marked ready) and legacy 'done'
+// (outcome-logged) both read as "Completed" — never "Prepared", never "Done".
+const PREP_STATE_LABEL: Record<string, string> = {
+  planned: "Active",
+  prepared: "Completed",
+  done: "Completed",
+  cancelled: "Cancelled",
+};
+
 export const dynamic = "force-dynamic";
 
 const EVENT_LABEL: Record<string, string> = {
   "guest.created": "Guest added",
   "stay.created": "Stay created",
-  "signal.created": "Signal captured",
+  "signal.created": "Note captured",
   "insight.created": "Insight created",
-  "recommendation.created": "Recommendation created",
-  "recommendation.accepted": "Recommendation approved",
-  "recommendation.dismissed": "Recommendation dismissed",
-  "host_action.created": "Host action planned",
-  "host_action.updated": "Host action updated",
+  "recommendation.created": "Suggestion created",
+  "recommendation.accepted": "Suggestion approved",
+  "recommendation.dismissed": "Suggestion dismissed",
+  "host_action.created": "Preparation created",
+  "host_action.updated": "Preparation updated",
   "outcome.created": "Outcome logged",
+  "preparation.created": "Preparation created",
+  "preparation.marked_ready": "Preparation marked ready",
 };
 
 const EVENT_ICON: Record<string, IconName> = {
@@ -64,6 +70,8 @@ const EVENT_ICON: Record<string, IconName> = {
   "host_action.created": "clipboard",
   "host_action.updated": "clipboard",
   "outcome.created": "check",
+  "preparation.created": "clipboard",
+  "preparation.marked_ready": "check",
 };
 
 function fmt(d: Date | string): string {
@@ -86,14 +94,10 @@ export default async function GuestMemoryPage({
   const memory = await getGuestMemory(tenantId, guestId);
   if (!memory) notFound();
 
-  const { guest, stays, signals, insights, recommendations, hostActions, outcomes, events } =
-    memory;
+  const { guest, stays, hostActions, outcomes, events } = memory;
   // Wave 2D — which outcomes already have a learning draft (any status), so the
   // capture prompt shows its captured state instead of re-prompting.
   const draftByOutcome = await listDraftStateForGuest(tenantId, guestId);
-  // Per-outcome capture availability (only for outcomes that could show the form):
-  // capture is offered ONLY when an authoritative, causally-linked property
-  // resolves — otherwise the UI shows an "unavailable" note (no raw error).
   const captureAvailable = new Map<string, boolean>();
   await Promise.all(
     outcomes
@@ -104,13 +108,9 @@ export default async function GuestMemoryPage({
   );
   const primaryStay = stays[0] ?? null;
   const contact = [guest.email, guest.language, guest.country].filter(Boolean).join(" · ");
-  // Reactive first-party slice: a preparation must be scoped to a stay with a property.
+  // A preparation must be scoped to a stay with a property.
   const eligibleStays = stays.filter((s) => s.propertyId);
-  // De-dup: an accepted recommendation that already has a host action must not offer
-  // "Plan host action" again.
-  const actionedRecIds = new Set(
-    hostActions.map((h) => h.recommendationId).filter((id): id is string => !!id),
-  );
+  const singleStay = eligibleStays.length === 1 ? eligibleStays[0] : null;
 
   return (
     <div>
@@ -149,224 +149,63 @@ export default async function GuestMemoryPage({
       </div>
 
       <div className="mt-7 grid grid-cols-1 gap-7 lg:grid-cols-[1fr_330px]">
-        {/* ---- Left: the manual chain (the core product workflow) ---- */}
+        {/* ---- Left: the primary action + the guest's preparations ---- */}
         <div className="space-y-7">
-          {/* Plan a preparation (reactive first-party slice) */}
+          {/* PRIMARY action: prepare for this stay (one short input, no taxonomy grid) */}
           {eligibleStays.length > 0 ? (
             <section>
-              <SectionTitle>Plan a preparation</SectionTitle>
-              <Card className="mt-3 p-4">
-                <p className="text-[12.5px] leading-relaxed" style={{ color: C.muted }}>
-                  A guest asked for something, or you noticed something for their stay? Pick the
-                  stay and the topics — you’ll see only what this property can safely prepare.
-                </p>
-                <form
-                  action={planPreparationAction.bind(null, guest.id)}
-                  className="mt-3 space-y-3"
-                >
-                  <Field label="For which stay?">
-                    <Select name="stayId" defaultValue={eligibleStays[0].id} required>
-                      {eligibleStays.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {(s.unitName ?? "Unit")} · {s.startDate} – {s.endDate}
-                        </option>
-                      ))}
-                    </Select>
-                  </Field>
-                  <Field label="What did they ask for, or what did you notice?">
+              <SectionTitle>Prepare for this stay</SectionTitle>
+              <Card className="mt-3 p-5" style={{ borderColor: C.clay }}>
+                <form action={planPreparationAction.bind(null, guest.id)} className="space-y-4">
+                  {singleStay ? (
+                    <input type="hidden" name="stayId" value={singleStay.id} />
+                  ) : (
+                    <Field label="Which stay?">
+                      <Select name="stayId" defaultValue={eligibleStays[0].id} required>
+                        {eligibleStays.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {(s.unitName ?? "Unit")} · {s.startDate} – {s.endDate}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                  )}
+
+                  <Field label="What would help this guest?">
                     <TextArea
                       name="note"
                       rows={2}
-                      placeholder="e.g. “They’d like a quiet hike.” (stored as your note; not analysed)"
+                      required
+                      placeholder="e.g. They'd like a quiet beach walk away from the crowds."
                     />
                   </Field>
-                  <div>
-                    <div className="mb-1 text-[12px] font-medium" style={{ color: C.muted }}>
-                      Topics
-                    </div>
-                    <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-                      {TOPIC_CATEGORIES.map((t) => (
-                        <label
-                          key={t}
-                          className="flex items-center gap-1.5 text-[12.5px]"
-                          style={{ color: C.ink }}
-                        >
-                          <input type="checkbox" name="topics" value={t} /> {tagLabel(t)}
-                        </label>
-                      ))}
-                    </div>
-                  </div>
+
                   <div className="flex flex-wrap items-center gap-3">
-                    <Select name="triggerSource" defaultValue="guest_stated" style={{ width: 190 }}>
+                    <Select name="triggerSource" defaultValue="guest_stated" style={{ width: 180 }}>
                       <option value="guest_stated">The guest asked</option>
-                      <option value="host_noted">I noticed it</option>
+                      <option value="host_noted">I noticed this</option>
                     </Select>
                     <SubmitButton type="submit">
-                      <Icon name="arrowRight" size={15} /> See what we can prepare
+                      <Icon name="arrowRight" size={15} /> Prepare for this stay
                     </SubmitButton>
                   </div>
+                  {singleStay ? (
+                    <div className="text-[12px]" style={{ color: C.muted }}>
+                      For {singleStay.unitName ?? "this stay"} · {singleStay.startDate} – {singleStay.endDate}
+                    </div>
+                  ) : null}
                 </form>
               </Card>
             </section>
           ) : null}
 
-          {/* Capture a signal */}
-          <section>
-            <SectionTitle>Capture a signal</SectionTitle>
-            <Card className="mt-3 p-4">
-              <form action={createSignalAction.bind(null, guest.id)} className="space-y-3">
-                <Field label="What did the guest tell you?">
-                  <TextArea
-                    name="body"
-                    rows={3}
-                    required
-                    placeholder="e.g. Mentioned it's their tenth anniversary; asked about quiet sunrise spots."
-                  />
-                </Field>
-                <SubmitButton type="submit">
-                  <Icon name="plus" size={15} /> Add signal
-                </SubmitButton>
-              </form>
-            </Card>
-          </section>
-
-          {/* Signals -> create insight */}
-          <section>
-            <SectionTitle>Signals</SectionTitle>
-            <div className="mt-3 space-y-3">
-              {signals.length === 0 ? (
-                <Card>
-                  <EmptyState>No signals captured yet.</EmptyState>
-                </Card>
-              ) : (
-                signals.map((s) => (
-                  <Card key={s.id} className="p-4">
-                    <div className="flex gap-3">
-                      <span className="mt-0.5 shrink-0" style={{ color: C.muted }}>
-                        <Icon name="note" size={16} />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[13.5px]" style={{ color: C.ink }}>
-                          {s.body}
-                        </div>
-                        <div className="mt-1 text-[11.5px] capitalize" style={{ color: C.muted }}>
-                          {s.type} · {fmt(s.occurredAt)}
-                        </div>
-                      </div>
-                    </div>
-                    <form
-                      action={createInsightAction.bind(null, s.id, guest.id)}
-                      className="mt-3 flex flex-wrap items-end gap-2 pt-3"
-                      style={{ borderTop: `1px solid ${C.soft}` }}
-                    >
-                      <div className="min-w-[220px] flex-1">
-                        <TextInput name="summary" required placeholder="Summarize the insight…" />
-                      </div>
-                      <SubmitButton type="submit" variant="ghost">
-                        Create insight
-                      </SubmitButton>
-                    </form>
-                  </Card>
-                ))
-              )}
-            </div>
-          </section>
-
-          {/* Insights -> create recommendation */}
-          <section>
-            <SectionTitle>Insights</SectionTitle>
-            <div className="mt-3 space-y-3">
-              {insights.length === 0 ? (
-                <Card>
-                  <EmptyState>No insights yet — create one from a signal above.</EmptyState>
-                </Card>
-              ) : (
-                insights.map((i) => (
-                  <Card key={i.id} className="p-4">
-                    <div className="text-[13.5px] font-medium" style={{ color: C.ink }}>
-                      {i.summary}
-                    </div>
-                    {i.detail ? (
-                      <div className="mt-1 text-[12.5px] leading-relaxed" style={{ color: C.muted }}>
-                        {i.detail}
-                      </div>
-                    ) : null}
-                    <div className="mt-1 text-[11px] uppercase tracking-[0.05em]" style={{ color: C.muted }}>
-                      {i.generatedBy}
-                    </div>
-                  </Card>
-                ))
-              )}
-            </div>
-          </section>
-
-          {/* Recommendations -> decision objects -> host action */}
-          <section>
-            <SectionTitle>Recommendations</SectionTitle>
-            <div className="mt-3 space-y-3">
-              {recommendations.length === 0 ? (
-                <Card>
-                  <EmptyState>No recommendations yet.</EmptyState>
-                </Card>
-              ) : (
-                recommendations.map((r) => (
-                  <Card key={r.id} className="p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="text-[15px] font-semibold" style={{ color: C.ink }}>
-                        {r.title}
-                      </div>
-                      <StatusBadge status={r.status} />
-                    </div>
-                    {r.description ? (
-                      <p className="mt-1.5 text-[13px] leading-relaxed" style={{ color: C.muted }}>
-                        {r.description}
-                      </p>
-                    ) : null}
-                    {r.rationale ? (
-                      <div className="mt-3">
-                        <RationaleNote>{r.rationale}</RationaleNote>
-                      </div>
-                    ) : null}
-
-                    {r.status === "pending" ? (
-                      <div className="mt-3 flex items-center gap-2">
-                        <form action={acceptRecommendationAction.bind(null, r.id, guest.id)}>
-                          <SubmitButton type="submit">
-                            <Icon name="check" size={15} /> Approve
-                          </SubmitButton>
-                        </form>
-                        <form action={dismissRecommendationAction.bind(null, r.id, guest.id)}>
-                          <SubmitButton type="submit" variant="ghost">
-                            Dismiss
-                          </SubmitButton>
-                        </form>
-                      </div>
-                    ) : null}
-
-                    {r.status === "accepted" ? (
-                      <p
-                        className="mt-3 flex items-center gap-1.5 pt-3 text-[12.5px]"
-                        style={{ borderTop: `1px solid ${C.soft}`, color: C.muted }}
-                      >
-                        <Icon name="check" size={13} />{" "}
-                        {actionedRecIds.has(r.id)
-                          ? "Added to preparations."
-                          : "Use “Plan a preparation” above to prepare this for a stay."}
-                      </p>
-                    ) : null}
-                  </Card>
-                ))
-              )}
-            </div>
-          </section>
-
-          {/* Preparations -> recover (link to detail) / log outcome */}
+          {/* Preparations for this guest — the recovery surface (click → work page). */}
           <section>
             <SectionTitle>Preparations</SectionTitle>
             <div className="mt-3 space-y-3">
               {hostActions.length === 0 ? (
                 <Card>
-                  <EmptyState>No host actions planned yet.</EmptyState>
+                  <EmptyState>No preparations yet — prepare something above.</EmptyState>
                 </Card>
               ) : (
                 hostActions.map((h) => (
@@ -384,14 +223,19 @@ export default async function GuestMemoryPage({
                           {h.title}
                         </Link>
                       </div>
-                      <StatusBadge status={h.status} />
+                      <span
+                        className="shrink-0 rounded-full px-2.5 py-[2px] text-[11.5px] font-medium"
+                        style={{ background: C.paper, color: C.muted }}
+                      >
+                        {PREP_STATE_LABEL[h.status] ?? h.status}
+                      </span>
                     </div>
                     {h.description ? (
                       <p className="mt-1 pl-7 text-[12.5px] leading-relaxed" style={{ color: C.muted }}>
                         {h.description}
                       </p>
                     ) : null}
-                    {h.status !== "done" ? (
+                    {h.status !== "done" && h.status !== "cancelled" ? (
                       <form
                         action={logOutcomeAction.bind(null, h.id, guest.id)}
                         className="mt-3 flex flex-wrap items-end gap-2 pt-3"
@@ -404,7 +248,7 @@ export default async function GuestMemoryPage({
                           <option value="unknown">Unknown</option>
                         </Select>
                         <div className="min-w-[200px] flex-1">
-                          <TextInput name="notes" placeholder="Outcome notes (optional)…" />
+                          <TextInput name="notes" placeholder="How did it go? (optional)…" />
                         </div>
                         <SubmitButton type="submit" variant="ghost">
                           Log outcome
@@ -417,10 +261,10 @@ export default async function GuestMemoryPage({
             </div>
           </section>
 
-          {/* Outcomes -> optional property-learning capture */}
+          {/* After the stay — outcomes + optional property learning (collapsed by default) */}
           {outcomes.length > 0 ? (
             <section>
-              <SectionTitle>Outcomes</SectionTitle>
+              <SectionTitle>After the stay</SectionTitle>
               <div className="mt-3 space-y-3">
                 {outcomes.map((o) => {
                   const draft = draftByOutcome.get(o.id);
@@ -447,13 +291,12 @@ export default async function GuestMemoryPage({
                         </span>
                       </div>
 
-                      {/* Capture-a-learning prompt (optional; collapsed by default). */}
                       <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${C.soft}` }}>
                         {draft ? (
                           <div className="flex items-center gap-2 text-[12.5px]" style={{ color: C.muted }}>
                             <Icon name="recommend" size={14} />
                             <span>
-                              Learning {draft.status === "promoted" ? "promoted to Property Intelligence" : draft.status === "discarded" ? "discarded" : "saved as a draft"}
+                              Learning {draft.status === "promoted" ? "promoted to Our Place" : draft.status === "discarded" ? "discarded" : "saved as a draft"}
                               {" · "}
                               {LEARNING_TYPE_LABEL[draft.learningType] ?? draft.learningType}
                             </span>
@@ -477,7 +320,7 @@ export default async function GuestMemoryPage({
                                 name="note"
                                 rows={2}
                                 required
-                                placeholder="e.g. “Early breakfast works well when arranged the evening before.”"
+                                placeholder="e.g. Early breakfast works well when arranged the evening before."
                               />
                               <div className="flex flex-wrap items-center gap-2">
                                 <Select name="learningType" defaultValue="local_insight" style={{ width: 230 }}>
@@ -503,7 +346,7 @@ export default async function GuestMemoryPage({
                                 </div>
                               </details>
                               <div className="text-[11px]" style={{ color: C.muted }}>
-                                Optional — saved as a draft for your review in Property Intelligence. Nothing is added automatically.
+                                Optional — saved as a draft for your review under Our Place. Nothing is added automatically.
                               </div>
                             </form>
                           </details>
@@ -514,7 +357,7 @@ export default async function GuestMemoryPage({
                             data-testid="capture-unavailable"
                           >
                             <Icon name="circle" size={14} />
-                            <span>No property is linked to this action — capture unavailable.</span>
+                            <span>No property is linked to this preparation — capture unavailable.</span>
                           </div>
                         )}
                       </div>
@@ -526,7 +369,7 @@ export default async function GuestMemoryPage({
           ) : null}
         </div>
 
-        {/* ---- Right: stay context, sensitive info, audit timeline ---- */}
+        {/* ---- Right: stay context, sensitive info, history ---- */}
         <div className="space-y-5">
           <section>
             <SectionTitle>Stay context</SectionTitle>
@@ -561,40 +404,47 @@ export default async function GuestMemoryPage({
           ) : null}
 
           <section>
-            <SectionTitle>Event timeline</SectionTitle>
-            <Card className="mt-3 p-4">
-              {events.length === 0 ? (
-                <div className="text-[13px]" style={{ color: C.muted }}>
-                  No events yet.
-                </div>
-              ) : (
-                <ul className="space-y-0">
-                  {events.map((e, i, arr) => (
-                    <li key={e.id} className="flex gap-3">
-                      <div className="flex flex-col items-center">
-                        <span
-                          className="flex h-7 w-7 items-center justify-center rounded-full"
-                          style={{ background: C.paper, color: C.clay }}
-                        >
-                          <Icon name={EVENT_ICON[e.type] ?? "circle"} size={13} />
-                        </span>
-                        {i < arr.length - 1 ? (
-                          <span className="my-0.5 w-px flex-1" style={{ background: C.soft }} />
-                        ) : null}
-                      </div>
-                      <div className="min-w-0 flex-1 pb-3.5">
-                        <div className="text-[12.5px]" style={{ color: C.ink }}>
-                          {EVENT_LABEL[e.type] ?? e.type}
+            <details>
+              <summary
+                className="cursor-pointer [&::-webkit-details-marker]:hidden"
+                style={{ listStyleType: "none" }}
+              >
+                <SectionTitle>History</SectionTitle>
+              </summary>
+              <Card className="mt-3 p-4">
+                {events.length === 0 ? (
+                  <div className="text-[13px]" style={{ color: C.muted }}>
+                    No events yet.
+                  </div>
+                ) : (
+                  <ul className="space-y-0">
+                    {events.map((e, i, arr) => (
+                      <li key={e.id} className="flex gap-3">
+                        <div className="flex flex-col items-center">
+                          <span
+                            className="flex h-7 w-7 items-center justify-center rounded-full"
+                            style={{ background: C.paper, color: C.clay }}
+                          >
+                            <Icon name={EVENT_ICON[e.type] ?? "circle"} size={13} />
+                          </span>
+                          {i < arr.length - 1 ? (
+                            <span className="my-0.5 w-px flex-1" style={{ background: C.soft }} />
+                          ) : null}
                         </div>
-                        <div className="text-[11px]" style={{ color: C.muted }}>
-                          {fmt(e.occurredAt)}
+                        <div className="min-w-0 flex-1 pb-3.5">
+                          <div className="text-[12.5px]" style={{ color: C.ink }}>
+                            {EVENT_LABEL[e.type] ?? e.type}
+                          </div>
+                          <div className="text-[11px]" style={{ color: C.muted }}>
+                            {fmt(e.occurredAt)}
+                          </div>
                         </div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </Card>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+            </details>
           </section>
         </div>
       </div>

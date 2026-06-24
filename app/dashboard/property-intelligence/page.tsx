@@ -217,8 +217,17 @@ export default async function PropertyIntelligencePage({
   return (
     <div>
       <PageHeader
-        title="Property Intelligence"
-        subtitle="Your property's private operational knowledge — what it can do, what only you know locally, and what to avoid."
+        title="Our Place"
+        subtitle="What we know about our homes, our local area, and what works for guests."
+        right={
+          <Link
+            href="/dashboard/properties"
+            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-[13px] font-medium no-underline"
+            style={{ background: C.surface, color: C.ink, border: `1px solid ${C.stone}` }}
+          >
+            <Icon name="properties" size={15} /> Homes
+          </Link>
+        }
       />
 
       {/* Privacy banner */}
